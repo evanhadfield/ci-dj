@@ -69,11 +69,13 @@ export function DeckPanel({
         </span>
       </header>
 
+      {/* Deliberately usable while the worker is dead: switching to a model
+          that fits is the recovery path when the chosen one cannot load. */}
       <Select
         label={t('deck.model.label')}
         value={state.model ?? ''}
         options={state.availableModels.length ? state.availableModels : [state.model ?? '']}
-        disabled={!operable}
+        disabled={!connected || state.switchingModel}
         onChange={onSetModel}
       />
 

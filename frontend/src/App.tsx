@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { DeckId } from './audio/engine'
+import { INITIAL_CROSSFADE, type DeckId } from './audio/engine'
 import { Deck } from './deck/Deck'
 import type { RamInfo } from './deck/deckState'
 import { Mixer } from './mixer/Mixer'
@@ -9,7 +9,7 @@ import { combinedRamWarning } from './ramWarning'
 
 function App() {
   const { t } = useTranslation()
-  const [crossfade, setCrossfade] = useState(0.5)
+  const [crossfade, setCrossfade] = useState(INITIAL_CROSSFADE)
   const [deckModels, setDeckModels] = useState<Record<DeckId, string | null>>({
     a: null,
     b: null,
@@ -21,6 +21,8 @@ function App() {
       setDeckModels((previous) =>
         previous[deckId] === model ? previous : { ...previous, [deckId]: model },
       )
+      // RAM info is machine-level and identical from both decks' hellos;
+      // first one wins.
       if (info) setRamInfo((previous) => previous ?? info)
     },
     [],

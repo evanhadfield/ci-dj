@@ -11,6 +11,7 @@ export type ServerEvent =
       channels: number
       chunk_seconds: number
       models: string[]
+      restarting: boolean
       total_ram_gb: number
       model_ram_estimate_gb: Record<string, number>
     }
@@ -107,10 +108,14 @@ export function deckReducer(state: DeckState, action: DeckAction): DeckState {
 function applyServerEvent(state: DeckState, event: ServerEvent): DeckState {
   switch (event.event) {
     case 'hello':
+      // hello is authoritative for the switch flag: a reconnect can land
+      // after a switch finished (its ready event drained with the old
+      // session), and the stale flag would otherwise lock the deck forever.
       return {
         ...state,
         model: event.model,
         availableModels: event.models,
+        switchingModel: event.restarting,
         ramInfo: {
           totalGb: event.total_ram_gb,
           estimateGbByModel: event.model_ram_estimate_gb,
@@ -127,9 +132,12 @@ function applyServerEvent(state: DeckState, event: ServerEvent): DeckState {
         error: null,
       }
     case 'model_loading':
-      // The old worker (and its stream and prompt) is gone.
+      // The old worker (and its stream and prompt) is gone. Adopting the
+      // target model now lets the RAM warning lead the load instead of
+      // trailing it.
       return {
         ...state,
+        model: event.model,
         switchingModel: true,
         workerDied: false,
         playing: false,

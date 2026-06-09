@@ -100,11 +100,22 @@ describe('DeckPanel', () => {
 
   it('offers recovery when the worker died', () => {
     const onRestart = vi.fn()
-    renderPanel({ connection: 'open', workerDied: true }, { onRestart })
+    renderPanel(
+      {
+        connection: 'open',
+        workerDied: true,
+        model: 'mrt2_base',
+        availableModels: ['mrt2_small', 'mrt2_base'],
+      },
+      { onRestart },
+    )
     expect(screen.getByRole('alert')).toHaveTextContent('The deck engine crashed.')
     fireEvent.click(screen.getByRole('button', { name: 'Restart deck' }))
     expect(onRestart).toHaveBeenCalled()
     expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled()
+    // Recovery from a model that cannot load is switching to one that can —
+    // the picker must stay usable while the worker is dead.
+    expect(screen.getByLabelText('Model')).toBeEnabled()
   })
 
   it('announces worker errors', () => {

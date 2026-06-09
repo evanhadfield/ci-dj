@@ -56,6 +56,10 @@ class FakeDeck:
 def deck(monkeypatch):
     fake = FakeDeck()
     monkeypatch.setitem(controller.decks, "a", fake)
+    # Disk contents must not decide test outcomes.
+    monkeypatch.setattr(
+        controller.engine, "available_models", lambda: ["mrt2_small", "mrt2_base"]
+    )
     return fake
 
 
@@ -192,6 +196,27 @@ def test_set_model_rejected_while_already_restarting(client, deck):
         ws.send_json({"type": "set_model", "model": "mrt2_base"})
         assert ws.receive_json()["event"] == "error"
     assert deck.restarted_with == []
+
+
+def test_worker_commands_rejected_while_restarting(client, deck):
+    deck.restarting = True
+    with connect(client) as ws:
+        assert ws.receive_json()["restarting"] is True
+        ws.send_json({"type": "play"})
+        assert ws.receive_json()["event"] == "error"
+    assert deck.cmd_queue.empty()
+
+
+def test_dead_worker_not_reported_during_restart(client, deck):
+    deck.process.alive = False
+    deck.restarting = True
+    with connect(client) as ws:
+        ws.receive_json()
+        # Give the pump a few poll intervals; the only thing through must be
+        # our sentinel, never worker_died.
+        wait_until(lambda: False, timeout=0.5)
+        deck.out_queue.put(("status", {"event": "sentinel"}))
+        assert ws.receive_json()["event"] == "sentinel"
 
 
 def test_restart_command_respawns_with_current_model(client, deck):

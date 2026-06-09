@@ -5,6 +5,7 @@ import {
   initialDeckState,
   type DeckAction,
   type DeckState,
+  type ServerEvent,
 } from './deckState'
 
 function reduce(actions: DeckAction[], from: DeckState = initialDeckState) {
@@ -24,29 +25,37 @@ describe('deckReducer', () => {
     expect(state.audible).toBe(true)
   })
 
+  const helloEvent: ServerEvent = {
+    event: 'hello',
+    deck: 'a',
+    model: 'mrt2_small',
+    sample_rate: 48_000,
+    channels: 2,
+    chunk_seconds: 1,
+    models: ['mrt2_small', 'mrt2_base'],
+    restarting: false,
+    total_ram_gb: 16,
+    model_ram_estimate_gb: { mrt2_small: 2, mrt2_base: 6 },
+  }
+
   it('adopts model, model list, and RAM info from the hello event', () => {
-    const state = reduce([
-      {
-        type: 'server_event',
-        event: {
-          event: 'hello',
-          deck: 'a',
-          model: 'mrt2_small',
-          sample_rate: 48_000,
-          channels: 2,
-          chunk_seconds: 1,
-          models: ['mrt2_small', 'mrt2_base'],
-          total_ram_gb: 16,
-          model_ram_estimate_gb: { mrt2_small: 2, mrt2_base: 6 },
-        },
-      },
-    ])
+    const state = reduce([{ type: 'server_event', event: helloEvent }])
     expect(state.model).toBe('mrt2_small')
     expect(state.availableModels).toEqual(['mrt2_small', 'mrt2_base'])
     expect(state.ramInfo).toEqual({
       totalGb: 16,
       estimateGbByModel: { mrt2_small: 2, mrt2_base: 6 },
     })
+  })
+
+  it('lets hello clear a switch flag stranded by a mid-switch reconnect', () => {
+    const state = reduce([
+      { type: 'server_event', event: { event: 'model_loading', model: 'mrt2_base' } },
+      { type: 'socket_closed' },
+      { type: 'server_event', event: { ...helloEvent, model: 'mrt2_base' } },
+    ])
+    expect(state.switchingModel).toBe(false)
+    expect(state.model).toBe('mrt2_base')
   })
 
   it('tracks generation speed from chunk events', () => {
@@ -90,6 +99,8 @@ describe('deckReducer', () => {
     expect(state.switchingModel).toBe(true)
     expect(state.playing).toBe(false)
     expect(state.activePrompt).toBeNull()
+    // Adopting the target immediately lets the RAM warning lead the load.
+    expect(state.model).toBe('mrt2_base')
   })
 
   it('clears switching and crash flags when the fresh worker is ready', () => {

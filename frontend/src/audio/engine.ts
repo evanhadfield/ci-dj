@@ -37,6 +37,9 @@ export type AudioEngine = {
 const SAMPLE_RATE = 48_000
 const PARAM_RAMP_SECONDS = 0.02
 
+/** Centre position; the single source for App state and the bus default. */
+export const INITIAL_CROSSFADE = 0.5
+
 /** Equal-power crossfade gains for a position in [0, 1] (0 = full A). */
 export function equalPowerGains(position: number): { a: number; b: number } {
   const clamped = Math.min(1, Math.max(0, position))
@@ -53,7 +56,7 @@ type Bus = {
 
 export function createAudioEngine(): AudioEngine {
   let busPromise: Promise<Bus> | null = null
-  let crossfadePosition = 0.5
+  let crossfadePosition = INITIAL_CROSSFADE
 
   async function buildBus(): Promise<Bus> {
     const context = new AudioContext({ sampleRate: SAMPLE_RATE })
@@ -126,13 +129,16 @@ export function createAudioEngine(): AudioEngine {
     setCrossfade(position) {
       crossfadePosition = position
       // Applies live when the bus exists; otherwise buildBus picks the
-      // stored position up at creation.
-      void busPromise?.then((bus) => {
-        const gains = equalPowerGains(position)
-        const now = bus.context.currentTime
-        bus.crossfade.a.gain.setTargetAtTime(gains.a, now, PARAM_RAMP_SECONDS)
-        bus.crossfade.b.gain.setTargetAtTime(gains.b, now, PARAM_RAMP_SECONDS)
-      })
+      // stored position up at creation. A failed bus build already surfaces
+      // through play(); the fader move itself has nothing to report.
+      void busPromise
+        ?.then((bus) => {
+          const gains = equalPowerGains(position)
+          const now = bus.context.currentTime
+          bus.crossfade.a.gain.setTargetAtTime(gains.a, now, PARAM_RAMP_SECONDS)
+          bus.crossfade.b.gain.setTargetAtTime(gains.b, now, PARAM_RAMP_SECONDS)
+        })
+        .catch(() => {})
     },
   }
 }

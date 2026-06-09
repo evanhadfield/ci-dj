@@ -33,7 +33,6 @@ PUMP_POLL_SECONDS = 0.2
 
 DECK_IDS = ("a", "b")
 DEFAULT_MODEL = "mrt2_small"
-AVAILABLE_MODELS = ("mrt2_small", "mrt2_base")
 
 # Rough whole-process footprints (model + MusicCoCa + MLX runtime), used only
 # for the UI's "this combination looks tight" warning — not enforcement.
@@ -150,9 +149,9 @@ def validate_command(parsed: object) -> tuple[dict | None, str | None]:
         return None, "set_prompt requires a non-empty string 'prompt'"
     if kind == "set_model":
         model = parsed.get("model")
-        if model in AVAILABLE_MODELS:
+        if model in engine.KNOWN_MODELS:
             return {"type": "set_model", "model": model}, None
-        return None, f"set_model requires 'model' in {list(AVAILABLE_MODELS)}"
+        return None, f"set_model requires 'model' in {list(engine.KNOWN_MODELS)}"
     return None, f"unknown command {kind!r}"
 
 
@@ -187,7 +186,10 @@ async def deck_socket(websocket: WebSocket, deck_id: str) -> None:
                 "sample_rate": engine.SAMPLE_RATE,
                 "channels": engine.CHANNELS,
                 "chunk_seconds": engine.CHUNK_SECONDS,
-                "models": list(AVAILABLE_MODELS),
+                # Only models present on disk: picking one that can't load
+                # would just crash the worker (mrt2_base is optional).
+                "models": engine.available_models(),
+                "restarting": deck.restarting,
                 "total_ram_gb": round(_total_ram_gb(), 1),
                 "model_ram_estimate_gb": MODEL_RAM_ESTIMATE_GB,
             }
@@ -228,6 +230,10 @@ async def deck_socket(websocket: WebSocket, deck_id: str) -> None:
                             asyncio.to_thread(deck.restart, target_model)
                         )
                         restart_task.add_done_callback(_log_restart_failure)
+                elif deck.restarting:
+                    # The worker (and its command queue) is being replaced;
+                    # the server is the trust boundary, not the disabled UI.
+                    await _send_error(websocket, "deck is loading a model")
                 else:
                     deck.send(command)
         except WebSocketDisconnect:
