@@ -24,7 +24,7 @@ describe('deckReducer', () => {
     expect(state.audible).toBe(true)
   })
 
-  it('adopts the model from the hello event', () => {
+  it('adopts model, model list, and RAM info from the hello event', () => {
     const state = reduce([
       {
         type: 'server_event',
@@ -35,10 +35,18 @@ describe('deckReducer', () => {
           sample_rate: 48_000,
           channels: 2,
           chunk_seconds: 1,
+          models: ['mrt2_small', 'mrt2_base'],
+          total_ram_gb: 16,
+          model_ram_estimate_gb: { mrt2_small: 2, mrt2_base: 6 },
         },
       },
     ])
     expect(state.model).toBe('mrt2_small')
+    expect(state.availableModels).toEqual(['mrt2_small', 'mrt2_base'])
+    expect(state.ramInfo).toEqual({
+      totalGb: 16,
+      estimateGbByModel: { mrt2_small: 2, mrt2_base: 6 },
+    })
   })
 
   it('tracks generation speed from chunk events', () => {
@@ -68,6 +76,40 @@ describe('deckReducer', () => {
     )
     expect(recovered.error).toBeNull()
     expect(recovered.activePrompt).toBe('funk')
+  })
+
+  it('enters a switching state and forgets the stream when a model loads', () => {
+    const state = reduce([
+      { type: 'play_requested' },
+      {
+        type: 'server_event',
+        event: { event: 'prompt_applied', prompt: 'funk', effective_from_chunk: 1 },
+      },
+      { type: 'server_event', event: { event: 'model_loading', model: 'mrt2_base' } },
+    ])
+    expect(state.switchingModel).toBe(true)
+    expect(state.playing).toBe(false)
+    expect(state.activePrompt).toBeNull()
+  })
+
+  it('clears switching and crash flags when the fresh worker is ready', () => {
+    const state = reduce([
+      { type: 'server_event', event: { event: 'worker_died', model: 'mrt2_small' } },
+      { type: 'server_event', event: { event: 'model_loading', model: 'mrt2_base' } },
+      { type: 'server_event', event: { event: 'ready', deck: 'a', model: 'mrt2_base' } },
+    ])
+    expect(state.switchingModel).toBe(false)
+    expect(state.workerDied).toBe(false)
+    expect(state.model).toBe('mrt2_base')
+  })
+
+  it('flags a dead worker and stops playing', () => {
+    const state = reduce([
+      { type: 'play_requested' },
+      { type: 'server_event', event: { event: 'worker_died', model: 'mrt2_small' } },
+    ])
+    expect(state.workerDied).toBe(true)
+    expect(state.playing).toBe(false)
   })
 
   it('stops playing and marks the connection when the socket closes', () => {
