@@ -53,3 +53,4 @@ verify-stream duration="60":
 # UI e2e in headless Chromium against a running server.
 verify-ui:
     cd frontend && node scripts/verify_m2.mjs
+    cd frontend && node scripts/verify_m3.mjs
