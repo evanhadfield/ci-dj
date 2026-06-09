@@ -78,8 +78,10 @@ export function useDeck(deckId: DeckId): DeckControls {
             console.warn(`deck ${deckId}: dropping malformed frame`, event.data)
             return
           }
-          if (parsed.event === 'model_loading') {
-            // The stream this buffer came from is gone with the old worker.
+          if (parsed.event === 'model_loading' || parsed.event === 'worker_died') {
+            // The stream this buffer came from is gone with the old worker;
+            // a crashed deck goes silent rather than draining its tail under
+            // the crash banner.
             channelRef.current?.reset()
           }
           dispatch({ type: 'server_event', event: parsed })

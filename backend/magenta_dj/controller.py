@@ -83,6 +83,9 @@ class DeckProcess:
         """
         try:
             self.shutdown()
+            # The old worker's backlog must not reach the client as if it
+            # came from the new model.
+            self.drain()
             self.model = model
             self._spawn()
             self.start()
@@ -219,6 +222,16 @@ async def deck_socket(websocket: WebSocket, deck_id: str) -> None:
                     target_model = command.get("model", deck.model)
                     if deck.restarting:
                         await _send_error(websocket, "model switch already in progress")
+                    elif (
+                        command["type"] == "set_model"
+                        and target_model not in engine.available_models()
+                    ):
+                        # The UI only offers downloaded models, but the
+                        # server is the trust boundary: loading a missing
+                        # model just crashes the fresh worker.
+                        await _send_error(
+                            websocket, f"model {target_model!r} is not downloaded"
+                        )
                     else:
                         deck.restarting = True
                         await websocket.send_text(

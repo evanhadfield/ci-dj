@@ -171,6 +171,18 @@ describe('useDeck connection', () => {
     expect(result.current.state.playing).toBe(false)
   })
 
+  it('silences the ring buffer when the worker dies', async () => {
+    const { engine, channel } = makeFakeEngine()
+    const { result } = renderDeck(engine)
+    act(() => socket(0).serverOpen())
+    await act(() => result.current.play())
+    const resetsBefore = vi.mocked(channel.reset).mock.calls.length
+
+    act(() => socket(0).serverEvent({ event: 'worker_died', model: 'mrt2_small' }))
+    expect(vi.mocked(channel.reset).mock.calls.length).toBe(resetsBefore + 1)
+    expect(result.current.state.workerDied).toBe(true)
+  })
+
   it('sends set_model and restart commands', () => {
     const { result } = renderDeck(makeFakeEngine().engine)
     act(() => socket(0).serverOpen())

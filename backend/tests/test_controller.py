@@ -214,9 +214,20 @@ def test_dead_worker_not_reported_during_restart(client, deck):
         ws.receive_json()
         # Give the pump a few poll intervals; the only thing through must be
         # our sentinel, never worker_died.
-        wait_until(lambda: False, timeout=0.5)
+        time.sleep(0.5)
         deck.out_queue.put(("status", {"event": "sentinel"}))
         assert ws.receive_json()["event"] == "sentinel"
+
+
+def test_set_model_rejected_for_model_not_on_disk(client, deck, monkeypatch):
+    monkeypatch.setattr(controller.engine, "available_models", lambda: ["mrt2_small"])
+    with connect(client) as ws:
+        ws.receive_json()
+        ws.send_json({"type": "set_model", "model": "mrt2_base"})
+        error = ws.receive_json()
+        assert error["event"] == "error"
+        assert "not downloaded" in error["error"]
+    assert deck.restarted_with == []
 
 
 def test_restart_command_respawns_with_current_model(client, deck):
