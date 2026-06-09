@@ -24,7 +24,7 @@ describe('deckReducer', () => {
     expect(state.audible).toBe(true)
   })
 
-  it('adopts model and chunk size from the hello event', () => {
+  it('adopts the model from the hello event', () => {
     const state = reduce([
       {
         type: 'server_event',
@@ -39,7 +39,6 @@ describe('deckReducer', () => {
       },
     ])
     expect(state.model).toBe('mrt2_small')
-    expect(state.chunkSeconds).toBe(1)
   })
 
   it('tracks generation speed from chunk events', () => {

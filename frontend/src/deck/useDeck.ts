@@ -74,7 +74,13 @@ export function useDeck(deckId: string): DeckControls {
             samples.buffer,
           ])
         } else {
-          const parsed = JSON.parse(event.data) as ServerEvent
+          let parsed: ServerEvent
+          try {
+            parsed = JSON.parse(event.data) as ServerEvent
+          } catch {
+            console.warn(`deck ${deckId}: dropping malformed frame`, event.data)
+            return
+          }
           dispatch({ type: 'server_event', event: parsed })
         }
       }
@@ -91,6 +97,7 @@ export function useDeck(deckId: string): DeckControls {
       clearTimeout(reconnectTimer)
       socketRef.current?.close()
       audioRef.current?.context.close()
+      audioRef.current = null
     }
   }, [deckId])
 
@@ -102,8 +109,19 @@ export function useDeck(deckId: string): DeckControls {
   }, [])
 
   const play = useCallback(async () => {
-    const audio = await ensureAudio()
-    await audio.context.resume()
+    try {
+      const audio = await ensureAudio()
+      await audio.context.resume()
+      // Drop whatever an earlier session left in the ring buffer, so the
+      // first thing heard is the new stream, not stale chunks.
+      audio.worklet.port.postMessage({ type: 'reset' })
+    } catch (error) {
+      dispatch({
+        type: 'local_error',
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return
+    }
     send({ type: 'play' })
     dispatch({ type: 'play_requested' })
   }, [ensureAudio, send])

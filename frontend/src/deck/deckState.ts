@@ -30,11 +30,11 @@ export type DeckAction =
   | { type: 'worklet_stats'; stats: WorkletStats }
   | { type: 'play_requested' }
   | { type: 'stop_requested' }
+  | { type: 'local_error'; error: string }
 
 export type DeckState = {
   connection: 'connecting' | 'open' | 'closed'
   model: string | null
-  chunkSeconds: number
   /** The user pressed play and the worker is expected to stream. */
   playing: boolean
   /** The worklet is actually emitting sound (false while prebuffering). */
@@ -49,7 +49,6 @@ export type DeckState = {
 export const initialDeckState: DeckState = {
   connection: 'connecting',
   model: null,
-  chunkSeconds: 1,
   playing: false,
   audible: false,
   activePrompt: null,
@@ -71,6 +70,8 @@ export function deckReducer(state: DeckState, action: DeckAction): DeckState {
       return { ...state, playing: true }
     case 'stop_requested':
       return { ...state, playing: false }
+    case 'local_error':
+      return { ...state, error: action.error }
     case 'worklet_stats':
       return {
         ...state,
@@ -86,7 +87,7 @@ export function deckReducer(state: DeckState, action: DeckAction): DeckState {
 function applyServerEvent(state: DeckState, event: ServerEvent): DeckState {
   switch (event.event) {
     case 'hello':
-      return { ...state, model: event.model, chunkSeconds: event.chunk_seconds }
+      return { ...state, model: event.model }
     case 'ready':
       return { ...state, model: event.model }
     case 'chunk':

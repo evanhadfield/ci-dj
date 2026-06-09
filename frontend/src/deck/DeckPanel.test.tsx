@@ -25,7 +25,7 @@ describe('DeckPanel', () => {
     renderPanel({ connection: 'open', playing: true, underruns: 3 })
     const stat = screen.getByText('Underruns').parentElement!
     expect(stat).toHaveTextContent('3')
-    expect(stat.className).toContain('ui-stat--danger')
+    expect(stat).toHaveClass('ui-stat--danger')
   })
 
   it('shows the buffer level in seconds', () => {
@@ -37,7 +37,7 @@ describe('DeckPanel', () => {
     renderPanel({ connection: 'open', generationSpeed: 0.84 })
     const stat = screen.getByText('Gen speed').parentElement!
     expect(stat).toHaveTextContent('0.84×')
-    expect(stat.className).toContain('ui-stat--danger')
+    expect(stat).toHaveClass('ui-stat--danger')
   })
 
   it('disables transport until the deck is connected', () => {

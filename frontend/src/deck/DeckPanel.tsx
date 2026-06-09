@@ -36,6 +36,11 @@ export function DeckPanel({
   const [promptDraft, setPromptDraft] = useState('')
 
   const connected = state.connection === 'open'
+  const statusKey = {
+    connecting: 'deck.status.connecting',
+    open: 'deck.status.connected',
+    closed: 'deck.status.disconnected',
+  }[state.connection]
   const bufferFraction = state.bufferedSeconds / BUFFER_TARGET_SECONDS
   const bufferTone =
     !state.playing || bufferFraction >= 0.5 ? 'ok' : bufferFraction >= 0.25 ? 'warn' : 'danger'
@@ -53,7 +58,7 @@ export function DeckPanel({
         <span
           className={`deck__status${connected ? '' : ' deck__status--disconnected'}`}
         >
-          {t(`deck.status.${state.connection === 'open' ? 'connected' : state.connection === 'closed' ? 'disconnected' : 'connecting'}`)}
+          {t(statusKey)}
         </span>
       </header>
 
@@ -114,7 +119,7 @@ export function DeckPanel({
           label={t('deck.health.generationSpeed')}
           value={
             state.generationSpeed === null
-              ? '—'
+              ? t('deck.health.noData')
               : t('deck.health.generationSpeedValue', {
                   rtf: state.generationSpeed.toFixed(2),
                 })
