@@ -86,23 +86,30 @@ async def main(duration: float) -> None:
     print(f"chunks received:      {chunks_received} ({audio_seconds:.1f}s audio)")
     print(f"underruns:            {underruns}")
     print(f"min buffer level:     {min_buffer:.2f}s")
-    print(f"worker RTF min/avg:   {min(rtfs):.2f}x / {sum(rtfs) / len(rtfs):.2f}x")
+    if rtfs:
+        print(f"worker RTF min/avg:   {min(rtfs):.2f}x / {sum(rtfs) / len(rtfs):.2f}x")
     second_prompt = [e for e in prompt_applied if e["prompt"] == PROMPT_B]
     boundary = second_prompt[0]["effective_from_chunk"] if second_prompt else None
-    print(f"prompt switch:        acknowledged={bool(second_prompt)}, effective_from_chunk={boundary}")
+    print(
+        f"prompt switch:        acknowledged={bool(second_prompt)}, effective_from_chunk={boundary}"
+    )
 
     if transition_chunks:
-        samples = np.concatenate([
-            np.frombuffer(pcm, dtype=np.float32).reshape(-1, 2)
-            for _, pcm in transition_chunks
-        ])
+        samples = np.concatenate(
+            [
+                np.frombuffer(pcm, dtype=np.float32).reshape(-1, 2)
+                for _, pcm in transition_chunks
+            ]
+        )
         with wave.open("m1_transition.wav", "wb") as f:
             f.setnchannels(2)
             f.setsampwidth(2)
             f.setframerate(SAMPLE_RATE)
             f.writeframes((np.clip(samples, -1, 1) * 32767).astype(np.int16).tobytes())
         first = transition_chunks[0][0]
-        print(f"transition evidence:  m1_transition.wav (chunks {first}..{transition_chunks[-1][0]})")
+        print(
+            f"transition evidence:  m1_transition.wav (chunks {first}..{transition_chunks[-1][0]})"
+        )
 
     passed = underruns == 0 and bool(second_prompt)
     print("VERDICT:", "PASS" if passed else "FAIL")

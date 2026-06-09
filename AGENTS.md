@@ -31,9 +31,16 @@ Run **`/berlitz-engineering:pre-pr-check`** to verify this list before opening a
 <!-- Fill in only what the agent cannot infer from the code itself. Keep each
      line concrete and verifiable - "run `npm test`", not "test your work". -->
 
-- Build / run / test: _add the exact commands for this project_
-- Branch & PR naming: _add the convention_
-- Gotchas / required env vars: _add anything non-obvious_
+- Build / run / test: from `backend/`: `uv sync`, run with `uv run magenta-dj`,
+  test with `uv run pytest`, format/lint with `uv run ruff format .` and
+  `uv run ruff check .`
+- Branch & PR naming: one branch per roadmap milestone or issue, kebab-case
+  (e.g. `m1-one-deck-audible`)
+- Gotchas: model weights live outside the repo in
+  `~/Documents/Magenta/magenta-rt-v2` (override with `MAGENTA_HOME`); first
+  run needs `uv run mrt models init` + `uv run mrt models download mrt2_small`.
+  Only `backend/magenta_dj/engine.py` may import `magenta_rt` (ADR-0002);
+  measured API facts are in `docs/spike-mrt2.md`
 
 ## Working with your agent here
 

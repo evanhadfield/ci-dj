@@ -26,15 +26,24 @@ t0 = time.time()
 mrt = system.MagentaRT2SystemMlxfn(size="mrt2_small")
 print(f"Loaded + warmed up in {time.time() - t0:.1f}s")
 
-prompts = ["warm disco funk", "warm disco funk", "dark minimal techno", "dark minimal techno"]
+prompts = [
+    "warm disco funk",
+    "warm disco funk",
+    "dark minimal techno",
+    "dark minimal techno",
+]
 style_cache = {p: mrt.embed_style(p) for p in set(prompts)}
-print(f"Style embedding shape: {style_cache[prompts[0]].shape}, dtype {style_cache[prompts[0]].dtype}")
+print(
+    f"Style embedding shape: {style_cache[prompts[0]].shape}, dtype {style_cache[prompts[0]].dtype}"
+)
 
 state = None
 chunks = []
 for i, prompt in enumerate(prompts):
     t0 = time.time()
-    wav, state = mrt.generate(style=style_cache[prompt], frames=FRAMES_PER_CHUNK, state=state)
+    wav, state = mrt.generate(
+        style=style_cache[prompt], frames=FRAMES_PER_CHUNK, state=state
+    )
     dt = time.time() - t0
     rtf = wav.seconds / dt
     chunks.append(wav.samples)

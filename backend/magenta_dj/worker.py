@@ -23,10 +23,12 @@ IDLE_POLL_SECONDS = 0.2
 TARGET_AHEAD_SECONDS = 3.0
 
 
-def run_deck_worker(deck_id: str, model: str, cmd_queue, out_queue) -> None:
+def run_deck_worker(
+    deck_id: str, model: str, cmd_queue, out_queue, engine_factory=DeckEngine
+) -> None:
     logging.basicConfig(level=logging.INFO)
     logger.info("deck %s: loading %s", deck_id, model)
-    engine = DeckEngine(model=model)
+    engine = engine_factory(model=model)
     out_queue.put(("status", {"event": "ready", "deck": deck_id, "model": model}))
 
     playing = False
@@ -68,31 +70,61 @@ def run_deck_worker(deck_id: str, model: str, cmd_queue, out_queue) -> None:
             elif kind == "stop":
                 playing = False
             elif kind == "set_prompt":
-                prompt = cmd["prompt"]
                 started = time.monotonic()
-                engine.set_prompt(prompt)
-                out_queue.put((
-                    "status",
-                    {
-                        "event": "prompt_applied",
-                        "prompt": prompt,
-                        "effective_from_chunk": chunk_index,
-                        "embed_seconds": round(time.monotonic() - started, 3),
-                    },
-                ))
+                try:
+                    engine.set_prompt(cmd["prompt"])
+                except Exception:
+                    # The deck must survive a bad prompt; the controller
+                    # validates shape, but embedding can still fail.
+                    logger.exception("deck %s: set_prompt failed", deck_id)
+                    out_queue.put(
+                        (
+                            "status",
+                            {
+                                "event": "error",
+                                "error": "set_prompt failed; prompt unchanged",
+                            },
+                        )
+                    )
+                else:
+                    prompt = cmd["prompt"]
+                    out_queue.put(
+                        (
+                            "status",
+                            {
+                                "event": "prompt_applied",
+                                "prompt": prompt,
+                                "effective_from_chunk": chunk_index,
+                                "embed_seconds": round(time.monotonic() - started, 3),
+                            },
+                        )
+                    )
 
         started = time.monotonic()
-        pcm = engine.generate_chunk()
+        try:
+            pcm = engine.generate_chunk()
+        except Exception:
+            logger.exception("deck %s: generation failed; deck stopped", deck_id)
+            playing = False
+            out_queue.put(
+                (
+                    "status",
+                    {"event": "error", "error": "generation failed; deck stopped"},
+                )
+            )
+            continue
         elapsed = time.monotonic() - started
         out_queue.put(("audio", pcm))
-        out_queue.put((
-            "status",
-            {
-                "event": "chunk",
-                "index": chunk_index,
-                "rtf": round(1.0 / elapsed, 2) if elapsed > 0 else None,
-                "prompt": prompt,
-            },
-        ))
+        out_queue.put(
+            (
+                "status",
+                {
+                    "event": "chunk",
+                    "index": chunk_index,
+                    "rtf": round(1.0 / elapsed, 2) if elapsed > 0 else None,
+                    "prompt": prompt,
+                },
+            )
+        )
         chunk_index += 1
         pace_seconds += CHUNK_SECONDS

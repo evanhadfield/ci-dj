@@ -59,16 +59,22 @@ class DeckProcess:
     def send(self, command: dict) -> None:
         self.cmd_queue.put(command)
 
+    def drain(self) -> None:
+        """Discard everything currently in the output queue."""
+        with contextlib.suppress(queue.Empty):
+            while True:
+                self.out_queue.get_nowait()
+
     def stop_and_drain(self) -> None:
         """Pause generation and empty the output queue.
 
         Called when the client goes away: the worker may be blocked on a full
-        out_queue, so draining is what lets it see the stop command.
+        out_queue, so draining is what lets it see the stop command. A worker
+        that unblocks mid-drain can still emit one last chunk, which is why
+        the next session drains again on connect.
         """
         self.send({"type": "stop"})
-        with contextlib.suppress(queue.Empty):
-            while True:
-                self.out_queue.get_nowait()
+        self.drain()
 
     def shutdown(self) -> None:
         if self.process.is_alive():
@@ -96,6 +102,25 @@ async def _deck_lifespan(_: FastAPI):
 app = FastAPI(lifespan=_deck_lifespan)
 
 
+def validate_command(parsed: object) -> tuple[dict | None, str | None]:
+    """Validate a client control message; returns (sanitized command, error)."""
+    if not isinstance(parsed, dict):
+        return None, "command must be a JSON object"
+    kind = parsed.get("type")
+    if kind in ("play", "stop"):
+        return {"type": kind}, None
+    if kind == "set_prompt":
+        prompt = parsed.get("prompt")
+        if isinstance(prompt, str) and prompt.strip():
+            return {"type": "set_prompt", "prompt": prompt}, None
+        return None, "set_prompt requires a non-empty string 'prompt'"
+    return None, f"unknown command {kind!r}"
+
+
+async def _send_error(websocket: WebSocket, error: str) -> None:
+    await websocket.send_text(json.dumps({"event": "error", "error": error}))
+
+
 @app.websocket("/ws/deck/{deck_id}")
 async def deck_socket(websocket: WebSocket, deck_id: str) -> None:
     deck = decks.get(deck_id)
@@ -106,36 +131,60 @@ async def deck_socket(websocket: WebSocket, deck_id: str) -> None:
         await websocket.close(code=4409, reason="deck already has a client")
         return
 
-    await websocket.accept()
+    # Claim the deck before the first await so a concurrent connection can't
+    # also pass the check above.
     deck.connected = True
-    websocket_info = json.dumps({
-        "event": "hello",
-        "deck": deck_id,
-        "model": deck.model,
-        "sample_rate": engine.SAMPLE_RATE,
-        "channels": engine.CHANNELS,
-        "chunk_seconds": engine.CHUNK_SECONDS,
-    })
-    await websocket.send_text(websocket_info)
-
-    pump = asyncio.create_task(_pump_worker_output(deck, websocket))
     try:
-        while True:
-            message = await websocket.receive_text()
-            command = json.loads(message)
-            if command.get("type") in ("play", "stop", "set_prompt"):
-                deck.send(command)
-            else:
-                await websocket.send_text(json.dumps({
-                    "event": "error",
-                    "error": f"unknown command {command.get('type')!r}",
-                }))
-    except WebSocketDisconnect:
-        pass
+        await websocket.accept()
+        # Discard output a previous session left behind. A worker unblocking
+        # from a full-queue put can still slip one late chunk past this
+        # drain; if that ever matters, tag queue messages per session.
+        deck.drain()
+        hello = json.dumps(
+            {
+                "event": "hello",
+                "deck": deck_id,
+                "model": deck.model,
+                "sample_rate": engine.SAMPLE_RATE,
+                "channels": engine.CHANNELS,
+                "chunk_seconds": engine.CHUNK_SECONDS,
+            }
+        )
+        await websocket.send_text(hello)
+
+        pump = asyncio.create_task(_pump_worker_output(deck, websocket))
+        try:
+            while True:
+                try:
+                    message = await websocket.receive_text()
+                except KeyError:
+                    # A binary frame; clients have nothing binary to tell us.
+                    await _send_error(websocket, "expected a JSON text frame")
+                    continue
+                try:
+                    parsed = json.loads(message)
+                except json.JSONDecodeError:
+                    await _send_error(websocket, "invalid JSON")
+                    continue
+                command, error = validate_command(parsed)
+                if command is None:
+                    await _send_error(websocket, error)
+                else:
+                    deck.send(command)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            pump.cancel()
+            try:
+                await pump
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                # A pump that died on a closing socket must not skip the
+                # cleanup below, or the deck stays locked and the worker
+                # jams on a full queue.
+                logger.exception("deck %s: output pump failed", deck.deck_id)
     finally:
-        pump.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await pump
         deck.stop_and_drain()
         deck.connected = False
 
