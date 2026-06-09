@@ -134,7 +134,7 @@ export function DeckPanel({
 
       {state.error && (
         <p className="deck__error" role="alert">
-          {t('deck.error.label')}: {state.error}
+          {t('deck.error.message', { message: state.error })}
         </p>
       )}
     </section>

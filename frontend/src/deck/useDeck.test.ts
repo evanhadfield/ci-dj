@@ -101,6 +101,19 @@ describe('useDeck connection', () => {
     expect(FakeWebSocket.instances).toHaveLength(1)
   })
 
+  it('surfaces a play() audio failure instead of swallowing it', async () => {
+    // jsdom has no AudioContext, so building the audio graph rejects —
+    // exactly the failure class (worklet 404, autoplay policy) play() must
+    // report through the deck's error channel.
+    const { result } = renderHook(() => useDeck('a'))
+    act(() => socket(0).serverOpen())
+
+    await act(() => result.current.play())
+    expect(result.current.state.error).toBeTruthy()
+    expect(result.current.state.playing).toBe(false)
+    expect(socket(0).sent).toHaveLength(0) // no play command without audio
+  })
+
   it('surfaces malformed frames as dropped, not crashes', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { result } = renderHook(() => useDeck('a'))

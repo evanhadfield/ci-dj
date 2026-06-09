@@ -28,31 +28,50 @@ export function useDeck(deckId: string): DeckControls {
   const [volume, setVolumeState] = useState(0.8)
   const volumeRef = useRef(volume)
 
-  const socketRef = useRef<WebSocket | null>(null)
-  const audioRef = useRef<{
+  type AudioGraph = {
     context: AudioContext
     worklet: AudioWorkletNode
     gain: GainNode
-  } | null>(null)
+  }
+  const socketRef = useRef<WebSocket | null>(null)
+  const audioRef = useRef<AudioGraph | null>(null)
+  // Memoised in-flight build so rapid play() clicks share one graph instead
+  // of leaking contexts (Chrome caps concurrent AudioContexts).
+  const audioPromiseRef = useRef<Promise<AudioGraph> | null>(null)
 
-  const ensureAudio = useCallback(async () => {
-    if (audioRef.current) return audioRef.current
+  const buildAudioGraph = useCallback(async (): Promise<AudioGraph> => {
     const context = new AudioContext({ sampleRate: SAMPLE_RATE })
-    await context.audioWorklet.addModule('/player-worklet.js')
-    const worklet = new AudioWorkletNode(context, 'pcm-player', {
-      numberOfOutputs: 1,
-      outputChannelCount: [2],
-    })
-    const gain = context.createGain()
-    gain.gain.value = volumeRef.current
-    worklet.connect(gain)
-    gain.connect(context.destination)
-    worklet.port.onmessage = (event: MessageEvent<WorkletStats>) => {
-      dispatch({ type: 'worklet_stats', stats: event.data })
+    try {
+      await context.audioWorklet.addModule('/player-worklet.js')
+      const worklet = new AudioWorkletNode(context, 'pcm-player', {
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+      })
+      const gain = context.createGain()
+      gain.gain.value = volumeRef.current
+      worklet.connect(gain)
+      gain.connect(context.destination)
+      worklet.port.onmessage = (event: MessageEvent<WorkletStats>) => {
+        dispatch({ type: 'worklet_stats', stats: event.data })
+      }
+      const graph = { context, worklet, gain }
+      audioRef.current = graph
+      return graph
+    } catch (error) {
+      void context.close()
+      throw error
     }
-    audioRef.current = { context, worklet, gain }
-    return audioRef.current
   }, [])
+
+  const ensureAudio = useCallback(() => {
+    if (!audioPromiseRef.current) {
+      audioPromiseRef.current = buildAudioGraph().catch((error: unknown) => {
+        audioPromiseRef.current = null // allow a retry after failure
+        throw error
+      })
+    }
+    return audioPromiseRef.current
+  }, [buildAudioGraph])
 
   useEffect(() => {
     let disposed = false
@@ -98,6 +117,7 @@ export function useDeck(deckId: string): DeckControls {
       socketRef.current?.close()
       audioRef.current?.context.close()
       audioRef.current = null
+      audioPromiseRef.current = null
     }
   }, [deckId])
 

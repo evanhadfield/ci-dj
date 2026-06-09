@@ -27,7 +27,7 @@
       "noData": "—"
     },
     "error": {
-      "label": "Deck error"
+      "message": "Deck error: {{message}}"
     }
   }
 }

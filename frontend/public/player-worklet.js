@@ -27,6 +27,8 @@ class PCMPlayer extends AudioWorkletProcessor {
       if (message.type === 'pcm') {
         this.enqueue(message.samples);
       } else if (message.type === 'reset') {
+        // Flushes queued audio only; underruns intentionally survive — the
+        // counter reports the whole page session, not one play.
         this.readPos = 0;
         this.writePos = 0;
         this.available = 0;
