@@ -131,6 +131,12 @@ close/reopen the app and pick up previous settings.
 
 ## M6 — Deck EQ: Hi / Mid / Low
 
+**Status: ✅ done (2026-06-10).** Exit criteria verified spectrally
+(`frontend/scripts/verify_m6.mjs`): killing deck A's low band measured
+**−39.6 dB** in the recorded master (Goertzel filter bank over the WAV)
+with the high band untouched, deck B streaming cleanly with isolated
+controls throughout, and the kill restored after reload.
+
 **Goal:** cut and boost frequency bands per deck like a DJ mixer — kill the
 lows on the incoming deck, swap basslines across the crossfade.
 
