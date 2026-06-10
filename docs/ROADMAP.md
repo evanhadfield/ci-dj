@@ -395,11 +395,10 @@ making "off" bit-exact; UI selector + knob per deck, persisted; SMART
 CFX remapped to the effect amount with the style sweep on SHIFT + knob.
 Exit criteria verified on the physical device against
 [`m12-hardware-checklist.md`](m12-hardware-checklist.md) — every box
-ticked, including the monitor confirmation that shifted CFX keeps its
-CC (the soft-shift assumption holds on this firmware). The PAD FX
-selection added afterwards (pads 1–6 pick the effect) awaits its
-checklist section — including the monitor check of the interpolated
-`0x10` bank base.
+ticked, including the monitor confirmations that shifted CFX keeps its
+CC (the soft-shift assumption holds on this firmware) and that the
+PAD FX bank sits at the interpolated `0x10` base, so pads 1–6 select
+the effects with truthful LEDs.
 
 **Goal:** sound-shape the running streams like a DJ mixer — per-deck
 effects on the model of Pioneer's Sound Color FX: one knob per channel,
