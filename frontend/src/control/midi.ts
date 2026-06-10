@@ -14,6 +14,15 @@ export type MidiStatus =
 
 export const FLX4_NAME_FRAGMENT = 'DDJ-FLX4'
 
+/** Makes the FLX4 dump every analog control's current position as
+ * ordinary CC traffic — knobs are silent until moved, so this is how a
+ * fresh connection syncs to the hardware. From the Mixxx FLX4 script
+ * ("query the controller for current control positions on startup");
+ * reverse-engineered there with Wireshark, doubles as its keep-alive. */
+export const FLX4_STATUS_QUERY = [
+  0xf0, 0x00, 0x40, 0x05, 0x00, 0x00, 0x04, 0x05, 0x00, 0x50, 0x02, 0xf7,
+]
+
 export type MidiLink = {
   /** Request access and bind the FLX4; safe to call again to retry. */
   connect: () => Promise<void>
@@ -44,7 +53,16 @@ export function createMidiLink({
     requestAccess ??
     (typeof navigator !== 'undefined' &&
     typeof navigator.requestMIDIAccess === 'function'
-      ? () => navigator.requestMIDIAccess()
+      ? // The position query is SysEx, so ask for it — but a SysEx-only
+        // refusal (separate prompt, policy) must not kill the link:
+        // everything except the connect-time sync works without it.
+        async () => {
+          try {
+            return await navigator.requestMIDIAccess({ sysex: true })
+          } catch {
+            return navigator.requestMIDIAccess()
+          }
+        }
       : null)
 
   let access: MIDIAccess | null = null
@@ -65,6 +83,11 @@ export function createMidiLink({
       }
     }
     output = findFlx4(granted.outputs)
+    // Every (re)bind syncs the app to the hardware: the controller
+    // answers the query by reporting all current knob/fader positions,
+    // which flow through the translator like any other move. Without
+    // the SysEx grant the sync is skipped, not the connection.
+    if (input && granted.sysexEnabled) output?.send(FLX4_STATUS_QUERY)
     onStatus(input ? 'connected' : 'no-device', input?.name ?? null)
   }
 

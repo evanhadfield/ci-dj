@@ -387,6 +387,69 @@ browser-sink path; survives reload; pure parts (framing, FIFO, device
 filtering) unit-tested; verified on hardware via the M9/M10 checklist's
 M11 addendum.
 
+## M12 — Color FX: one-knob effects per deck
+
+**Status: ✅ done (2026-06-10).** The canonical six shipped over pure
+curves (ADR-0008) at the pre-fader insert, with the branch-pair bypass
+making "off" bit-exact; UI selector + knob per deck, persisted; SMART
+CFX remapped to the effect amount with the style sweep on SHIFT + knob.
+Exit criteria verified on the physical device against
+[`m12-hardware-checklist.md`](m12-hardware-checklist.md) — every box
+ticked, including the monitor confirmations that shifted CFX keeps its
+CC (the soft-shift assumption holds on this firmware) and that the
+PAD FX bank sits at the interpolated `0x10` base, so pads 1–6 select
+the effects with truthful LEDs.
+
+**Goal:** sound-shape the running streams like a DJ mixer — per-deck
+effects on the model of Pioneer's Sound Color FX: one knob per channel,
+centre off, the turn shaping both wet amount and character. The SMART
+CFX knob drives it from the hardware — the knob's actual purpose.
+Deliberately Color FX and not Beat FX: the synced family (rolls,
+beat-delays) needs a tempo grid we don't have (ADR-0004); one-knob
+effects are tempo-free.
+
+Scope, ordered by risk:
+
+1. **Effect insert + pure curves (ADR).** Per-deck insert point post-EQ,
+   *before* the cue tap and fader, so the phones preview the effect on a
+   primed deck exactly like a real mixer. Each effect is a pure
+   `amount → parameters` curve (the EQ-math pattern, unit-tested) over a
+   small node graph; selecting an effect swaps the graph, centre/zero is
+   bit-transparent bypass. ADR records the insert point and the
+   one-knob-curve convention.
+2. **The canonical six** (DJM/rekordbox Sound Color FX vocabulary), in
+   build order:
+   - **Filter** — bipolar: left sweeps a low-pass, right a high-pass,
+     centre flat (one BiquadFilter; the non-negotiable default)
+   - **Dub Echo** — DelayNode + feedback gain + darkening filter in the
+     loop; knob = feedback/wet
+   - **Space** — ConvolverNode reverb with a generated impulse response;
+     knob = wet blend
+   - **Crush** — bit/sample-rate reduction in a small AudioWorklet;
+     knob = intensity
+   - **Noise** — filtered white-noise riser mixed in; knob sweeps its
+     filter and level
+   - **Sweep** — free-running LFO gate/duck (no tempo sync by design)
+   - *(stretch)* **Flanger** and **Phaser** — LFO-modulated delay /
+     all-pass chain
+3. **UI.** Per-deck effect selector (the model-picker pattern) and an
+   amount knob on the deck column; selection and amount persist like
+   every other setting; active effect named in the deck status area.
+4. **Hardware: the CFX handover.** SMART CFX remaps from style sweep to
+   a new `fx_amount` intent (the knob's hardware meaning); the style
+   sweep moves to **SHIFT + SMART CFX** if the firmware sends distinct
+   bytes for the shifted knob — verify with the in-app monitor before
+   relying on it — else the sweep stays on-screen-only (pads keep
+   jumping styles regardless). Effect selection lives on the PAD FX
+   pad bank: pads 1–6 pick the effect (LED-echoed, re-press for off).
+
+**Exit criteria:** on a playing deck, every shipped effect audibly
+transforms the stream and returns to bit-transparent at centre/zero;
+the CFX knob rides the active effect with the on-screen knob following;
+the cue feed previews effects on a primed deck; selection and amount
+survive a reload; curves and the mapping rows unit-tested; verified on
+the device against a checklist addendum.
+
 ## Later (not committed)
 
 Ideas parked deliberately — each would get its own ADR if picked up:

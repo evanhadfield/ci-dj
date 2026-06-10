@@ -1,4 +1,5 @@
 import type { DeckId } from '../audio/engine'
+import { FX_KINDS } from '../audio/fx'
 import { isDeckOperable } from '../deck/deckState'
 import type { DeckControls } from '../deck/useDeck'
 import type { ControlIntent } from './bus'
@@ -45,6 +46,18 @@ export function applyAppIntent(
     case 'cue_toggle': {
       const deck = decks[intent.deck]
       deck.setCue(!deck.cue)
+      return
+    }
+    case 'fx_amount':
+      decks[intent.deck].setFxAmount(intent.value)
+      return
+    case 'fx_select': {
+      // PAD FX bank: pads 1–6 are the six effects; pressing the active
+      // effect's pad toggles it off, like a hardware FX section.
+      const kind = FX_KINDS[intent.index]
+      if (!kind) return
+      const deck = decks[intent.deck]
+      deck.setFx(deck.fx.kind === kind ? null : kind)
       return
     }
     case 'crossfade':

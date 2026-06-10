@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
+import type { FxKind } from '../audio/fx'
 import { createControlBus, type ControlBus } from '../control/bus'
 import { ControlBusProvider } from '../control/ControlBusProvider'
 import { updateDeckSettings } from '../persistence'
@@ -13,6 +14,7 @@ function renderPanel(
   state: Partial<DeckState>,
   handlers: Record<string, () => void> = {},
   bus: ControlBus = createControlBus(),
+  fx: { kind: FxKind | null; amount: number } = { kind: null, amount: 0 },
 ) {
   return render(
     <ControlBusProvider bus={bus}>
@@ -26,6 +28,9 @@ function renderPanel(
         onSetModel={(handlers.onSetModel as (m: string) => void) ?? noop}
         onRestart={handlers.onRestart ?? noop}
         onTargetCount={handlers.onTargetCount as (count: number) => void}
+        fx={fx}
+        onSetFx={(handlers.onSetFx as (k: unknown) => void) ?? noop}
+        onSetFxAmount={(handlers.onSetFxAmount as (v: number) => void) ?? noop}
       />
     </ControlBusProvider>,
   )
@@ -295,6 +300,48 @@ describe('DeckColumn', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'generation failed; deck stopped',
     )
+  })
+
+  it('selects a Color FX by name and reports knob moves', () => {
+    const onSetFx = vi.fn()
+    const onSetFxAmount = vi.fn()
+    renderPanel(
+      { connection: 'open' },
+      { onSetFx: onSetFx as () => void, onSetFxAmount: onSetFxAmount as () => void },
+      createControlBus(),
+      { kind: 'filter', amount: 0.5 },
+    )
+
+    fireEvent.change(screen.getByLabelText('Effect'), {
+      target: { value: 'dub_echo' },
+    })
+    expect(onSetFx).toHaveBeenCalledWith('dub_echo')
+    // The option shows translated copy while the value stays the kind.
+    expect(screen.getByRole('option', { name: 'Dub Echo' })).toHaveValue(
+      'dub_echo',
+    )
+
+    fireEvent.change(screen.getByLabelText('FX amount'), {
+      target: { value: '0.8' },
+    })
+    expect(onSetFxAmount).toHaveBeenCalledWith(0.8)
+  })
+
+  it('switching FX off and disabling the knob', () => {
+    const onSetFx = vi.fn()
+    renderPanel(
+      { connection: 'open' },
+      { onSetFx: onSetFx as () => void },
+      createControlBus(),
+      { kind: null, amount: 0 },
+    )
+    expect(screen.getByLabelText('Effect')).toHaveValue('')
+    expect(screen.getByLabelText('FX amount')).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText('Effect'), {
+      target: { value: '' },
+    })
+    expect(onSetFx).toHaveBeenCalledWith(null)
   })
 
   it('reports the style target count for the pad LED echo', () => {

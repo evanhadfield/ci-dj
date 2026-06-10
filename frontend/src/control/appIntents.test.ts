@@ -11,6 +11,9 @@ function fakeDeck(state: Partial<DeckState> = {}): DeckControls {
     eq: { low: 0.5, mid: 0.5, high: 0.5 },
     cue: false,
     setCue: vi.fn(),
+    fx: { kind: null, amount: 0 },
+    setFx: vi.fn(),
+    setFxAmount: vi.fn(),
     primed: false,
     prime: vi.fn(async () => {}),
     play: vi.fn(async () => {}),
@@ -105,6 +108,38 @@ describe('applyAppIntent', () => {
     applyAppIntent({ kind: 'deck_prep', deck: 'a' }, decks(a), noHandlers)
     expect(a.prime).not.toHaveBeenCalled()
     expect(a.stop).not.toHaveBeenCalled()
+  })
+
+  it('routes the FX amount to the addressed deck', () => {
+    const a = fakeDeck()
+    const b = fakeDeck()
+    applyAppIntent(
+      { kind: 'fx_amount', deck: 'b', value: 0.7 },
+      decks(a, b),
+      noHandlers,
+    )
+    expect(b.setFxAmount).toHaveBeenCalledWith(0.7)
+    expect(a.setFxAmount).not.toHaveBeenCalled()
+  })
+
+  it('selects an effect from a PAD FX pad and toggles it off on repeat', () => {
+    const a = fakeDeck()
+    applyAppIntent({ kind: 'fx_select', deck: 'a', index: 1 }, decks(a), noHandlers)
+    expect(a.setFx).toHaveBeenCalledWith('dub_echo')
+
+    const echoed = { ...fakeDeck(), fx: { kind: 'dub_echo' as const, amount: 0.4 } }
+    applyAppIntent(
+      { kind: 'fx_select', deck: 'a', index: 1 },
+      decks(echoed),
+      noHandlers,
+    )
+    expect(echoed.setFx).toHaveBeenCalledWith(null)
+  })
+
+  it('ignores PAD FX pads beyond the effect list', () => {
+    const a = fakeDeck()
+    applyAppIntent({ kind: 'fx_select', deck: 'a', index: 7 }, decks(a), noHandlers)
+    expect(a.setFx).not.toHaveBeenCalled()
   })
 
   it('hands crossfade to the callback', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { createMidiLink, type MidiStatus } from './midi'
+import { createMidiLink, FLX4_STATUS_QUERY, type MidiStatus } from './midi'
 
 type FakePort = {
   name: string
@@ -17,6 +17,7 @@ function fakeAccess(inputs: FakePort[], outputs: FakePort[] = []) {
     inputs: new Map(inputs.map((port, index) => [`in-${index}`, port])),
     outputs: new Map(outputs.map((port, index) => [`out-${index}`, port])),
     onstatechange: null as (() => void) | null,
+    sysexEnabled: true,
   }
 }
 
@@ -120,6 +121,71 @@ describe('createMidiLink', () => {
     access.onstatechange?.()
     expect(statuses.at(-1)).toEqual(['no-device', null])
     expect(flx4.onmidimessage).toBeNull()
+  })
+
+  it('queries current control positions whenever the device binds', async () => {
+    const flx4Out = fakePort('DDJ-FLX4')
+    const access = fakeAccess([fakePort('DDJ-FLX4')], [flx4Out])
+    const { link } = createLink(access)
+    await link.connect()
+    // Knobs only report when moved; the query makes the controller dump
+    // its current positions so the app syncs on connect.
+    expect(flx4Out.send).toHaveBeenCalledWith(FLX4_STATUS_QUERY)
+
+    // A replug re-syncs too.
+    flx4Out.send.mockClear()
+    access.onstatechange?.()
+    expect(flx4Out.send).toHaveBeenCalledWith(FLX4_STATUS_QUERY)
+  })
+
+  it('connects without the query when the grant has no SysEx', async () => {
+    const flx4Out = fakePort('DDJ-FLX4')
+    const access = fakeAccess([fakePort('DDJ-FLX4')], [flx4Out])
+    access.sysexEnabled = false
+    const { link, statuses } = createLink(access)
+    await link.connect()
+    expect(statuses.at(-1)).toEqual(['connected', 'DDJ-FLX4'])
+    expect(flx4Out.send).not.toHaveBeenCalled()
+  })
+
+  it('falls back to plain MIDI when the SysEx request is refused', async () => {
+    const access = fakeAccess([fakePort('DDJ-FLX4')])
+    access.sysexEnabled = false
+    const requestMIDIAccess = vi.fn((options?: { sysex?: boolean }) =>
+      options?.sysex
+        ? Promise.reject(new Error('SecurityError'))
+        : Promise.resolve(access as unknown as MIDIAccess),
+    )
+    const original = Object.getOwnPropertyDescriptor(
+      navigator,
+      'requestMIDIAccess',
+    )
+    Object.defineProperty(navigator, 'requestMIDIAccess', {
+      configurable: true,
+      value: requestMIDIAccess,
+    })
+    try {
+      const statuses: MidiStatus[] = []
+      const link = createMidiLink({
+        onMessage: vi.fn(),
+        onStatus: (status) => statuses.push(status),
+      })
+      await link.connect()
+      expect(statuses.at(-1)).toBe('connected')
+      expect(requestMIDIAccess).toHaveBeenCalledTimes(2)
+    } finally {
+      if (original) {
+        Object.defineProperty(navigator, 'requestMIDIAccess', original)
+      } else {
+        delete (navigator as { requestMIDIAccess?: unknown }).requestMIDIAccess
+      }
+    }
+  })
+
+  it('skips the position query when only an input is present', async () => {
+    const { link, statuses } = createLink(fakeAccess([fakePort('DDJ-FLX4')]))
+    await expect(link.connect()).resolves.toBeUndefined()
+    expect(statuses.at(-1)).toEqual(['connected', 'DDJ-FLX4'])
   })
 
   it('sends LED bytes to the matching output only', async () => {

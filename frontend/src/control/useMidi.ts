@@ -4,7 +4,9 @@ import type { DeckId } from '../audio/engine'
 import { useControlBus } from './busContext'
 import {
   createFlx4Translator,
+  isPadModeSwitch,
   PAD_COUNT,
+  PAD_FX_NOTE_BASE,
   PAD_STATUS_BY_DECK,
 } from './flx4'
 import { createMidiLink, type MidiStatus } from './midi'
@@ -26,8 +28,11 @@ export function useMidi() {
       : 'unsupported',
   )
   const [deviceName, setDeviceName] = useState<string | null>(null)
+  // Bumped when the controller switches pad modes — a switch clears the
+  // device's pad LEDs, so subscribers repaint everything they own.
+  const [ledEpoch, setLedEpoch] = useState(0)
 
-  const [{ connect, readMonitor, setLed, setPadLeds }] = useState(() => {
+  const [{ connect, readMonitor, setLed, setPadLeds, setFxPadLeds }] = useState(() => {
     let entries: MidiMonitorEntry[] = []
     let nextEntryId = 0
     const translate = createFlx4Translator()
@@ -40,6 +45,7 @@ export function useMidi() {
         ]
         const intent = translate(bytes)
         if (intent) bus.publish(intent)
+        if (isPadModeSwitch(bytes)) setLedEpoch((epoch) => epoch + 1)
       },
       onStatus: (nextStatus, nextDeviceName) => {
         setStatus(nextStatus)
@@ -61,8 +67,28 @@ export function useMidi() {
           setLed(PAD_STATUS_BY_DECK[deck], pad, pad < count)
         }
       },
+      /** Light the active effect's pad in the PAD FX bank (null = all
+       * dark). */
+      setFxPadLeds: (deck: DeckId, activeIndex: number | null) => {
+        for (let pad = 0; pad < PAD_COUNT; pad++) {
+          setLed(
+            PAD_STATUS_BY_DECK[deck],
+            PAD_FX_NOTE_BASE + pad,
+            pad === activeIndex,
+          )
+        }
+      },
     }
   })
 
-  return { status, deviceName, connect, readMonitor, setLed, setPadLeds }
+  return {
+    status,
+    deviceName,
+    connect,
+    readMonitor,
+    setLed,
+    setPadLeds,
+    setFxPadLeds,
+    ledEpoch,
+  }
 }

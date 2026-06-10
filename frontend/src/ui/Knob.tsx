@@ -10,6 +10,9 @@ type KnobProps = {
   step?: number
   accent?: KnobAccent
   disabled?: boolean
+  /** Where double-click parks the knob; defaults to the range centre
+   * (the EQ-flat convention). Effects rest elsewhere (ADR-0008). */
+  resetValue?: number
   onChange: (value: number) => void
 }
 
@@ -43,7 +46,7 @@ function arcPath(fromDegrees: number, toDegrees: number) {
 
 /** Rotary control: an SVG arc dial over a real (invisible) range input, so
  * keyboard, labels, and test tooling keep native input semantics.
- * Double-click resets to the centre of the range (the EQ-flat convention). */
+ * Double-click resets to `resetValue` (range centre by default). */
 export function Knob({
   label,
   value,
@@ -52,6 +55,7 @@ export function Knob({
   step = 0.01,
   accent = 'master',
   disabled,
+  resetValue,
   onChange,
 }: KnobProps) {
   const id = useId()
@@ -84,7 +88,7 @@ export function Knob({
           value={value}
           disabled={disabled}
           onChange={(event) => onChange(Number(event.target.value))}
-          onDoubleClick={() => onChange((min + max) / 2)}
+          onDoubleClick={() => onChange(resetValue ?? (min + max) / 2)}
         />
       </div>
       <label className="ui-knob__label" htmlFor={id}>
