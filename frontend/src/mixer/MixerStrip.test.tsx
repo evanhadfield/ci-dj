@@ -15,6 +15,10 @@ vi.mock('../audio/outputs', () => ({
   ]),
 }))
 
+vi.mock('../audio/cueStream', () => ({
+  listCueJackOutputs: vi.fn(async () => [{ name: 'DDJ-FLX4' }]),
+}))
+
 function makeEngine(overrides: Partial<AudioEngine> = {}): AudioEngine {
   return {
     createDeckChannel: vi.fn(),
@@ -22,6 +26,8 @@ function makeEngine(overrides: Partial<AudioEngine> = {}): AudioEngine {
     setCrossfade: vi.fn(),
     setCueMix: vi.fn(),
     setCueDevice: vi.fn(async () => {}),
+    startCueCapture: vi.fn(async () => {}),
+    stopCueCapture: vi.fn(),
     startRecording: vi.fn(async () => {}),
     stopRecording: vi.fn(async () => new Blob(['x'], { type: 'audio/wav' })),
     getMasterLevel: vi.fn(() => 0),
@@ -175,6 +181,22 @@ describe('MixerStrip headphone cue', () => {
     expect(onCueDeviceChange).toHaveBeenCalledWith({
       deviceId: 'bt',
       label: 'WH-1000XM4',
+    })
+  })
+
+  it('offers the backend phones jack and hands it up flagged', async () => {
+    const onCueDeviceChange = vi.fn(async () => {})
+    renderMixer(makeEngine(), { onCueDeviceChange })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Find devices' }))
+    const select = screen.getByLabelText('Phones out')
+    await waitFor(() => expect(select).toContainHTML('DDJ-FLX4 — phones jack'))
+
+    fireEvent.change(select, { target: { value: 'DDJ-FLX4 — phones jack' } })
+    expect(onCueDeviceChange).toHaveBeenCalledWith({
+      deviceId: 'DDJ-FLX4',
+      label: 'DDJ-FLX4 — phones jack',
+      backend: true,
     })
   })
 

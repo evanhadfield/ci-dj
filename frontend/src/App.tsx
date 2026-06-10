@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { INITIAL_CROSSFADE, INITIAL_CUE_MIX, type DeckId } from './audio/engine'
+import { startCueStream } from './audio/cueStream'
 import { useAudioEngine } from './audio/engineContext'
 import type { AudioOutputDevice } from './audio/outputs'
 import { applyAppIntent } from './control/appIntents'
@@ -35,6 +36,10 @@ function App() {
     () => loadAppSettings().cueDevice ?? null,
   )
 
+  // A live backend cue stream's stop function (ADR-0007); null while the
+  // cue rides a browser sink or is off.
+  const cueStreamStop = useRef<(() => void) | null>(null)
+
   // Hand the restored mix positions and cue device to the engine once —
   // it holds them until the bus is built on first play. Later moves go
   // through the handlers, so this deliberately ignores state updates.
@@ -42,7 +47,15 @@ function App() {
   useEffect(() => {
     engine.setCrossfade(crossfade)
     engine.setCueMix(cueMix)
-    if (cueDevice) void engine.setCueDevice(cueDevice.deviceId).catch(() => {})
+    if (cueDevice?.backend) {
+      void startCueStream(engine, cueDevice.deviceId)
+        .then((stop) => {
+          cueStreamStop.current = stop
+        })
+        .catch(() => {})
+    } else if (cueDevice) {
+      void engine.setCueDevice(cueDevice.deviceId).catch(() => {})
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine])
 
@@ -76,7 +89,14 @@ function App() {
     async (device: AudioOutputDevice | null) => {
       setCueDevice(device)
       updateAppSettings({ cueDevice: device })
-      await engine.setCueDevice(device?.deviceId ?? null)
+      cueStreamStop.current?.()
+      cueStreamStop.current = null
+      if (device?.backend) {
+        await engine.setCueDevice(null)
+        cueStreamStop.current = await startCueStream(engine, device.deviceId)
+      } else {
+        await engine.setCueDevice(device?.deviceId ?? null)
+      }
     },
     [engine],
   )

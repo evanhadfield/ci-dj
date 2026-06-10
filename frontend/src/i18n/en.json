@@ -32,6 +32,7 @@
     "phonesOutput": "Phones out",
     "phonesOff": "Off",
     "phonesScan": "Find devices",
+    "phonesJack": "{{name}} — phones jack",
     "phonesError": "Phones output failed: {{message}}",
     "record": "Record",
     "stopRecording": "Stop recording",

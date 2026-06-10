@@ -123,7 +123,11 @@ export function loadAppSettings(): Partial<AppSettings> {
     typeof cueDevice.deviceId === 'string' &&
     typeof cueDevice.label === 'string'
   ) {
-    settings.cueDevice = { deviceId: cueDevice.deviceId, label: cueDevice.label }
+    settings.cueDevice = {
+      deviceId: cueDevice.deviceId,
+      label: cueDevice.label,
+      ...(cueDevice.backend === true ? { backend: true } : {}),
+    }
   }
   return settings
 }

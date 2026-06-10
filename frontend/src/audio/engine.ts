@@ -56,6 +56,13 @@ export type AudioEngine = {
   setCueMix: (position: number) => void
   /** Route the cue feed to an output device; null switches it off. */
   setCueDevice: (deviceId: string | null) => Promise<void>
+  /** Tap the blended headphone feed as interleaved stereo float32
+   * batches — the backend cue sink's wire format (ADR-0007). Starting a
+   * new capture replaces a running one. */
+  startCueCapture: (
+    onChunk: (samples: Float32Array<ArrayBuffer>) => void,
+  ) => Promise<void>
+  stopCueCapture: () => void
   /** Master-bus RMS level, 0..~1 (what the speakers get). */
   getMasterLevel: () => number
   /** Start capturing the master bus (exactly the speaker feed). */
@@ -91,6 +98,7 @@ type Bus = {
   cueBus: GainNode
   cueLevel: GainNode
   cueMonitor: GainNode
+  cueFeed: GainNode
   cueOut: MediaStreamAudioDestinationNode
 }
 
@@ -114,6 +122,7 @@ export function createAudioEngine(): AudioEngine {
   // cue-out stream to the chosen headphone device.
   let cueElement: HTMLAudioElement | null = null
   let cueDeviceId: string | null = null
+  let cueCapture: AudioWorkletNode | null = null
   let recorder: Recorder | null = null
   // Mirrors bus.masterAnalyser: getMasterLevel must be synchronous (meters
   // poll it every frame) while the bus itself sits behind a promise.
@@ -138,18 +147,22 @@ export function createAudioEngine(): AudioEngine {
       crossfade.a.connect(master)
       crossfade.b.connect(master)
       // Headphone feed (ADR-0006): cue taps sum into cueBus; the blend
-      // pair reuses the equal-power law (a = cue, b = master).
+      // pair reuses the equal-power law (a = cue, b = master). cueFeed is
+      // the summed result — what the phones hear — so the browser sink
+      // and the backend cue capture (ADR-0007) share one tap point.
       const cueGains = equalPowerGains(cueMixPosition)
       const cueBus = context.createGain()
       const cueLevel = context.createGain()
       cueLevel.gain.value = cueGains.a
       const cueMonitor = context.createGain()
       cueMonitor.gain.value = cueGains.b
+      const cueFeed = context.createGain()
       const cueOut = context.createMediaStreamDestination()
       cueBus.connect(cueLevel)
-      cueLevel.connect(cueOut)
+      cueLevel.connect(cueFeed)
       master.connect(cueMonitor)
-      cueMonitor.connect(cueOut)
+      cueMonitor.connect(cueFeed)
+      cueFeed.connect(cueOut)
       return {
         context,
         master,
@@ -158,12 +171,22 @@ export function createAudioEngine(): AudioEngine {
         cueBus,
         cueLevel,
         cueMonitor,
+        cueFeed,
         cueOut,
       }
     } catch (error) {
       void context.close()
       throw error
     }
+  }
+
+  function stopCueCapture() {
+    const node = cueCapture
+    if (!node) return
+    cueCapture = null
+    node.port.postMessage({ type: 'stop' })
+    node.port.onmessage = null
+    void busPromise?.then((bus) => bus.cueFeed.disconnect(node)).catch(() => {})
   }
 
   function ensureBus(): Promise<Bus> {
@@ -366,6 +389,25 @@ export function createAudioEngine(): AudioEngine {
       // persisted device on load); resume() retries inside one.
       void cueElement.play().catch(() => {})
     },
+
+    async startCueCapture(onChunk) {
+      stopCueCapture()
+      const bus = await ensureBus()
+      const node = new AudioWorkletNode(bus.context, 'pcm-recorder', {
+        numberOfInputs: 1,
+        numberOfOutputs: 0,
+      })
+      node.port.onmessage = (event) => {
+        if (event.data.type === 'pcm') {
+          onChunk(event.data.samples as Float32Array<ArrayBuffer>)
+        }
+      }
+      bus.cueFeed.connect(node)
+      node.port.postMessage({ type: 'start' })
+      cueCapture = node
+    },
+
+    stopCueCapture,
 
     setCrossfade(position) {
       crossfadePosition = position

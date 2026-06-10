@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { EQ_BANDS, type EqBand } from '../audio/eq'
 import type { DeckId } from '../audio/engine'
 import { useAudioEngine } from '../audio/engineContext'
+import { listCueJackOutputs } from '../audio/cueStream'
 import { listAudioOutputs, type AudioOutputDevice } from '../audio/outputs'
 import { useControlBus } from '../control/busContext'
 import { Button } from '../ui/Button'
@@ -75,7 +76,20 @@ export function MixerStrip({
 
   async function scanCueOutputs() {
     try {
-      setCueOutputs(await listAudioOutputs())
+      // Browser sinks plus the backend's phones jacks (ADR-0007) — the
+      // jack entries route through /ws/cue instead of an audio element.
+      const [browserOutputs, jackOutputs] = await Promise.all([
+        listAudioOutputs(),
+        listCueJackOutputs(),
+      ])
+      setCueOutputs([
+        ...browserOutputs,
+        ...jackOutputs.map(({ name }) => ({
+          deviceId: name,
+          label: t('mixer.phonesJack', { name }),
+          backend: true,
+        })),
+      ])
       setPhonesError(null)
     } catch (cause) {
       setPhonesError(cause instanceof Error ? cause.message : String(cause))

@@ -16,12 +16,19 @@ class FakeWebSocket {
   static CONNECTING = 0
   static OPEN = 1
   static CLOSED = 3
+  static instances: FakeWebSocket[] = []
 
+  url: string
   binaryType = ''
   readyState = FakeWebSocket.CONNECTING
   onopen: (() => void) | null = null
   onmessage: ((event: { data: unknown }) => void) | null = null
   onclose: (() => void) | null = null
+
+  constructor(url: string) {
+    this.url = url
+    FakeWebSocket.instances.push(this)
+  }
 
   send() {}
 
@@ -37,6 +44,8 @@ function makeEngine(): AudioEngine {
     setCrossfade: vi.fn(),
     setCueMix: vi.fn(),
     setCueDevice: vi.fn(async () => {}),
+    startCueCapture: vi.fn(async () => {}),
+    stopCueCapture: vi.fn(),
     startRecording: vi.fn(async () => {}),
     stopRecording: vi.fn(async () => new Blob()),
     getMasterLevel: vi.fn(() => 0),
@@ -53,7 +62,10 @@ function renderApp(engine: AudioEngine, bus: ControlBus = createControlBus()) {
   )
 }
 
-beforeEach(() => vi.stubGlobal('WebSocket', FakeWebSocket))
+beforeEach(() => {
+  FakeWebSocket.instances = []
+  vi.stubGlobal('WebSocket', FakeWebSocket)
+})
 afterEach(() => vi.unstubAllGlobals())
 
 describe('App crossfade ownership', () => {
@@ -88,6 +100,24 @@ describe('App crossfade ownership', () => {
     renderApp(engine)
     expect(engine.setCueDevice).toHaveBeenCalledWith('flx4')
     expect(screen.getByLabelText('Phones out')).toHaveValue('DDJ-FLX4')
+  })
+
+  it('restores a backend cue device by opening the cue stream', () => {
+    updateAppSettings({
+      cueDevice: {
+        deviceId: 'DDJ-FLX4',
+        label: 'DDJ-FLX4 — phones jack',
+        backend: true,
+      },
+    })
+    const engine = makeEngine()
+    renderApp(engine)
+    expect(
+      FakeWebSocket.instances.some((socket) =>
+        socket.url.includes('/ws/cue?device=DDJ-FLX4'),
+      ),
+    ).toBe(true)
+    expect(engine.setCueDevice).not.toHaveBeenCalled()
   })
 
   it('a hardware cue-mix intent flows through the same chain', () => {

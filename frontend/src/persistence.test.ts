@@ -54,6 +54,17 @@ describe('persistence', () => {
     })
   })
 
+  it('round-trips a backend cue device with its flag', () => {
+    updateAppSettings({
+      cueDevice: { deviceId: 'DDJ-FLX4', label: 'DDJ-FLX4 — phones jack', backend: true },
+    })
+    expect(loadAppSettings().cueDevice).toEqual({
+      deviceId: 'DDJ-FLX4',
+      label: 'DDJ-FLX4 — phones jack',
+      backend: true,
+    })
+  })
+
   it('keeps an explicit cue-device opt-out distinct from never-set', () => {
     expect(loadAppSettings().cueDevice).toBeUndefined()
     updateAppSettings({ cueDevice: null })

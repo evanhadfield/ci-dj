@@ -73,6 +73,8 @@ function makeFakeEngine(overrides: Partial<AudioEngine> = {}) {
     setCrossfade: vi.fn(),
     setCueMix: vi.fn(),
     setCueDevice: vi.fn(async () => {}),
+    startCueCapture: vi.fn(async () => {}),
+    stopCueCapture: vi.fn(),
     startRecording: vi.fn(async () => {}),
     stopRecording: vi.fn(async () => new Blob()),
     getMasterLevel: vi.fn(() => 0),

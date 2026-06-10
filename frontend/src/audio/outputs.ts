@@ -1,6 +1,12 @@
 /** Audio output device discovery for the cue feed (ADR-0006). */
 
-export type AudioOutputDevice = { deviceId: string; label: string }
+export type AudioOutputDevice = {
+  deviceId: string
+  label: string
+  /** Played by the backend cue sink (ADR-0007) instead of a browser
+   * sink; deviceId is then the backend's device name. */
+  backend?: boolean
+}
 
 function labelledOutputs(devices: MediaDeviceInfo[]): AudioOutputDevice[] {
   return devices
