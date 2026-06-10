@@ -9,6 +9,7 @@
  * policy requires a user gesture).
  */
 
+import { EQ_BANDS, EQ_FILTERS, eqValueToDb, type EqBand } from './eq'
 import { encodeWav, floatToInt16 } from './wav'
 
 export type DeckId = 'a' | 'b'
@@ -17,6 +18,7 @@ export type DeckChannel = {
   postPcm: (samples: Float32Array) => void
   reset: () => void
   setVolume: (volume: number) => void
+  setEq: (band: EqBand, value: number) => void
   dispose: () => void
 }
 
@@ -29,7 +31,7 @@ export type StatsHandler = (stats: {
 export type AudioEngine = {
   createDeckChannel: (
     deckId: DeckId,
-    initialVolume: number,
+    initial: { volume: number; eq: Record<EqBand, number> },
     onStats: StatsHandler,
   ) => Promise<DeckChannel>
   resume: () => Promise<void>
@@ -102,15 +104,32 @@ export function createAudioEngine(): AudioEngine {
   }
 
   return {
-    async createDeckChannel(deckId, initialVolume, onStats) {
+    async createDeckChannel(deckId, initial, onStats) {
       const bus = await ensureBus()
       const worklet = new AudioWorkletNode(bus.context, 'pcm-player', {
         numberOfOutputs: 1,
         outputChannelCount: [2],
       })
+      // worklet → low → mid → high → volume → crossfade (roadmap M6).
+      const eqNodes = Object.fromEntries(
+        EQ_BANDS.map((band) => {
+          const layout = EQ_FILTERS[band]
+          const filter = bus.context.createBiquadFilter()
+          filter.type = layout.type
+          filter.frequency.value = layout.frequency
+          if (layout.q !== undefined) filter.Q.value = layout.q
+          filter.gain.value = eqValueToDb(initial.eq[band])
+          return [band, filter]
+        }),
+      ) as Record<EqBand, BiquadFilterNode>
+      let head: AudioNode = worklet
+      for (const band of EQ_BANDS) {
+        head.connect(eqNodes[band])
+        head = eqNodes[band]
+      }
       const volume = bus.context.createGain()
-      volume.gain.value = initialVolume
-      worklet.connect(volume)
+      volume.gain.value = initial.volume
+      head.connect(volume)
       volume.connect(bus.crossfade[deckId])
       worklet.port.onmessage = (event) => onStats(event.data)
       return {
@@ -127,9 +146,17 @@ export function createAudioEngine(): AudioEngine {
             PARAM_RAMP_SECONDS,
           )
         },
+        setEq(band, value) {
+          eqNodes[band].gain.setTargetAtTime(
+            eqValueToDb(value),
+            bus.context.currentTime,
+            PARAM_RAMP_SECONDS,
+          )
+        },
         dispose() {
           worklet.port.onmessage = null
           worklet.disconnect()
+          for (const band of EQ_BANDS) eqNodes[band].disconnect()
           volume.disconnect()
         },
       }

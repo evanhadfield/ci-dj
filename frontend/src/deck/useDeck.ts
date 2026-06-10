@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 
+import { EQ_FLAT, type EqBand } from '../audio/eq'
 import { useAudioEngine } from '../audio/engineContext'
 import { loadDeckSettings, updateDeckSettings } from '../persistence'
 import type { DeckChannel, DeckId } from '../audio/engine'
@@ -16,12 +17,14 @@ const RECONNECT_DELAY_MS = 2_000
 export type DeckControls = {
   state: DeckState
   volume: number
+  eq: Record<EqBand, number>
   play: () => Promise<void>
   stop: () => void
   setStyle: (style: ActiveStyle) => void
   setModel: (model: string) => void
   restartWorker: () => void
   setVolume: (volume: number) => void
+  setEqBand: (band: EqBand, value: number) => void
 }
 
 /** Owns one deck's WebSocket and its channel on the shared audio engine
@@ -31,6 +34,11 @@ export function useDeck(deckId: DeckId): DeckControls {
   const [state, dispatch] = useReducer(deckReducer, initialDeckState)
   const [volume, setVolumeState] = useState(() => loadDeckSettings(deckId).volume ?? 0.8)
   const volumeRef = useRef(volume)
+  const [eq, setEqState] = useState<Record<EqBand, number>>(
+    () =>
+      loadDeckSettings(deckId).eq ?? { low: EQ_FLAT, mid: EQ_FLAT, high: EQ_FLAT },
+  )
+  const eqRef = useRef(eq)
 
   const socketRef = useRef<WebSocket | null>(null)
   const channelRef = useRef<DeckChannel | null>(null)
@@ -41,8 +49,10 @@ export function useDeck(deckId: DeckId): DeckControls {
   const ensureChannel = useCallback(() => {
     if (!channelPromiseRef.current) {
       channelPromiseRef.current = engine
-        .createDeckChannel(deckId, volumeRef.current, (stats) =>
-          dispatch({ type: 'worklet_stats', stats }),
+        .createDeckChannel(
+          deckId,
+          { volume: volumeRef.current, eq: eqRef.current },
+          (stats) => dispatch({ type: 'worklet_stats', stats }),
         )
         .then((channel) => {
           channelRef.current = channel
@@ -168,14 +178,27 @@ export function useDeck(deckId: DeckId): DeckControls {
     [deckId],
   )
 
+  const setEqBand = useCallback(
+    (band: EqBand, value: number) => {
+      const next = { ...eqRef.current, [band]: value }
+      eqRef.current = next
+      setEqState(next)
+      updateDeckSettings(deckId, { eq: next })
+      channelRef.current?.setEq(band, value)
+    },
+    [deckId],
+  )
+
   return {
     state,
     volume,
+    eq,
     play,
     stop,
     setStyle,
     setModel,
     restartWorker,
     setVolume,
+    setEqBand,
   }
 }

@@ -60,6 +60,7 @@ function makeFakeEngine(overrides: Partial<AudioEngine> = {}) {
     postPcm: vi.fn(),
     reset: vi.fn(),
     setVolume: vi.fn(),
+    setEq: vi.fn(),
     dispose: vi.fn(),
   }
   const engine: AudioEngine = {
@@ -200,6 +201,24 @@ describe('useDeck connection', () => {
       JSON.stringify({ type: 'set_model', model: 'mrt2_base' }),
       JSON.stringify({ type: 'restart' }),
     ])
+  })
+
+  it('restores persisted EQ and applies band changes to the channel', async () => {
+    updateDeckSettings('a', { eq: { low: 0.2, mid: 0.5, high: 0.9 } })
+    const { engine, channel } = makeFakeEngine()
+    const { result } = renderDeck(engine)
+    expect(result.current.eq).toEqual({ low: 0.2, mid: 0.5, high: 0.9 })
+
+    act(() => socket(0).serverOpen())
+    await act(() => result.current.play())
+    // The channel was built with the restored EQ…
+    expect(vi.mocked(engine.createDeckChannel).mock.calls[0][1]).toMatchObject({
+      eq: { low: 0.2, mid: 0.5, high: 0.9 },
+    })
+    // …and live band moves reach it.
+    act(() => result.current.setEqBand('low', 0))
+    expect(channel.setEq).toHaveBeenCalledWith('low', 0)
+    expect(result.current.eq.low).toBe(0)
   })
 
   it('restores the persisted volume', () => {

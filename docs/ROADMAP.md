@@ -129,6 +129,141 @@ Scope:
 **Exit criteria:** record a 5-minute mix to WAV that matches what was heard;
 close/reopen the app and pick up previous settings.
 
+## M6 — Deck EQ: Hi / Mid / Low
+
+**Status: ✅ done (2026-06-10).** Exit criteria verified spectrally
+(`frontend/scripts/verify_m6.mjs`): killing deck A's low band measured
+**−39.6 dB** in the recorded master (Goertzel filter bank over the WAV)
+with the high band untouched, deck B streaming cleanly with isolated
+controls throughout, and the kill restored after reload. Known limit: the
+mid band is a 1 kHz bell, so its bottom is a deep notch, not a full-band
+kill (the shelf+peak trade-off of compact mixer EQs).
+
+**Goal:** cut and boost frequency bands per deck like a DJ mixer — kill the
+lows on the incoming deck, swap basslines across the crossfade.
+
+Scope:
+
+- Three BiquadFilterNodes per deck channel in the audio engine
+  (ADR-0003's graph grows to: worklet → low shelf (~250 Hz) → mid peaking
+  (~1 kHz) → high shelf (~2.5 kHz) → volume → crossfade). Pure, tested
+  knob-value → dB curve: centre = flat (0 dB), top = +6 dB boost, bottom =
+  full kill (−40 dB).
+- Three per-deck EQ controls in the UI (design-system sliders), persisted
+  like volume, restored on reload.
+- Spectral verification, not vibes: the e2e records the master bus with
+  LOW killed vs. flat on a playing deck and asserts the low-band energy
+  drop in the WAV (the M5 harness already parses recordings).
+
+**Exit criteria:** killing a band audibly (and measurably, in the recorded
+spectrum) removes it while the other deck is unaffected; EQ settings
+survive a reload.
+
+## M7 — Hardware control: Pioneer DDJ-FLX4 over Web MIDI
+
+**Goal:** perform on physical hardware — the FLX4's surface drives the
+decks, mixer, and style pads without touching the mouse. Architecture in
+[ADR-0005](adr/0005-hardware-control-via-web-midi-in-the-frontend.md):
+Web MIDI in the frontend, dispatching into the existing UI handlers.
+
+Scope, ordered by risk:
+
+1. **MIDI plumbing + monitor.** "Connect MIDI" button (user-gesture
+   permission), device detection by name with a status indicator, and a
+   debug monitor showing incoming messages. The byte map is already
+   documented ([`midi-ddj-flx4.md`](midi-ddj-flx4.md), sourced from the
+   Mixxx community mapping + Pioneer's official list); the monitor is the
+   verification tool against the physical device's firmware.
+2. **ControlBus.** Typed control intents (`{deck, action, value}`) as a
+   small pub/sub: Deck and Mixer subscribe with their existing handlers,
+   sources (MIDI now, anything later) publish. Keyboard/mouse unchanged.
+3. **FLX4 mapping table** — pure and unit-tested, from
+   [`midi-ddj-flx4.md`](midi-ddj-flx4.md):
+   - channel faders → deck volumes; crossfader → master crossfade
+     (14-bit MSB/LSB pairs)
+   - PLAY/PAUSE per deck → play/stop
+   - EQ HI/MID/LOW knobs → the M6 deck EQ bands (what a DJ expects)
+   - performance pads 1–8 → snap the style-pad cursor to target N
+     (cue points for prompts)
+   - SMART CFX knob → sweep the style-pad cursor around the target
+     circle (continuous morph; pads snap, the knob glides)
+   - BEAT FX ON/OFF → record toggle
+   - tempo sliders deliberately unmapped (ADR-0004); jog wheels unmapped
+     in v1
+4. **(Stretch) LED feedback** — light pads that have a style target, via
+   MIDI out through the same module.
+
+**Exit criteria:** with a DDJ-FLX4 connected, start/stop both decks, ride
+the channel faders, EQs, and crossfader, jump styles from the pads and
+morph with the CFX knob — hands off the mouse, with every hardware move
+reflected live in the UI. Verified with the physical device against a written checklist
+(hardware cannot be e2e-automated), plus unit tests for the full mapping
+table.
+
+## M8 — UI overhaul: from web page to instrument
+
+**Goal:** the app reads as DJ software — booth topology, hardware-style
+controls, living signal displays — while behavior, hooks, and the audio
+graph stay untouched (purely presentational; no ADR needed, ADR-0003's
+architecture is unchanged). Aesthetic direction: rekordbox/Serato-class
+dark instrument panels, no vendor trade dress.
+
+Recommended execution order: **M6 (EQ function) → M8 (the face) → M7
+(hardware)** — M8 ships the Knob component the EQ wants to live in, and
+M7's LED/status work then lands on a stable surface. M8 has no hard
+dependency either way.
+
+Scope:
+
+1. **Tokens v2.** Same token-only discipline, new vocabulary: near-black
+   panel palette with inset borders (no floating-card shadows), per-deck
+   accent colours (deck A ≠ deck B), LED state colours, condensed
+   uppercase micro-labels, monospace numeric readouts, tighter spacing,
+   small hardware radii. Light-touch motion (LED blink for REC, meter
+   decay) — no decorative animation.
+2. **Design-system components**, each specced before building (purpose /
+   variants / states / API, per the design-system rule):
+   - `Knob` — rotary with arc indicator; vertical-drag + arrow keys +
+     double-click-to-centre; sizes S/M; used by EQ (M6) and morph sweep.
+   - `VerticalFader` — channel volume; the crossfader stays horizontal.
+   - `LevelMeter` — segmented LED column from an AnalyserNode, peak hold;
+     per channel and master.
+   - `TransportButton` — large square, lit state, icon glyphs.
+   - `Panel` / `PanelLabel` — the structural chrome with silkscreen
+     labels, replacing cards.
+3. **Booth layout.** Full-viewport CSS grid, no page scroll:
+
+   ```
+   ┌────────────────────────┬──────────┬────────────────────────┐
+   │ DECK A waveform strip  │  MASTER  │ DECK B waveform strip  │
+   ├────────────────────────┤ meter ·  ├────────────────────────┤
+   │ style pad   │ targets  │ REC ·    │ targets    │ style pad │
+   │             │ model    │ status   │ model      │           │
+   │ transport · readouts   ├──────────┤ transport · readouts   │
+   │                        │ EQ knobs │                        │
+   │                        │ ch faders│                        │
+   │                        │ ─ xfade ─│                        │
+   └────────────────────────┴──────────┴────────────────────────┘
+   ```
+
+   Connection/model/MIDI state moves into a thin status strip instead of
+   prose inside cards.
+4. **Per-deck waveform/spectrum strip** (pulled in from "Later"): an
+   AnalyserNode tap per deck channel rendering a scrolling waveform or
+   spectrum — the buffer-health meter stays, the strip makes the signal
+   visible.
+5. **Behaviour freeze.** Containers, hooks, reducers, engine, wire
+   protocol: untouched. DeckPanel decomposes into presentational pieces;
+   i18n keys and accessibility names survive so component tests and the
+   e2e suites keep their selectors (updated only where labels genuinely
+   change).
+
+**Exit criteria:** the booth layout above at full viewport with the centre
+mixer strip; every control rendered from the new design-system components
+(no hardcoded colours/spacing outside tokens); live per-deck waveform
+strips and channel meters; all existing e2e suites green on the new
+surface; before/after screenshots in the PR.
+
 ## Later (not committed)
 
 Ideas parked deliberately — each would get its own ADR if picked up:
@@ -137,12 +272,11 @@ Ideas parked deliberately — each would get its own ADR if picked up:
   ADR-0002.
 - **C++ engine (`magentart::core`) backend** — single distributable binary,
   supersedes ADR-0002 if pursued.
-- **MIDI controller mapping** (Web MIDI) — physical crossfader and knobs.
+- **Controller LED/display feedback beyond M7's stretch** — full
+  bidirectional surface state (requires the FLX4 output map).
 - **Audio-prompt styles** — MRT styles can come from reference audio, not just
   text: "make deck B sound like this track".
 - **Output device picker** (`setSinkId`) / external interface routing.
-- **Per-deck visuals** — waveform/spectrum via AnalyserNodes (cheap, cut from
-  MVP by choice).
 - **Prompt/preset library** with crates of saved styles.
 
 ## Standing risks
@@ -153,3 +287,5 @@ Ideas parked deliberately — each would get its own ADR if picked up:
 | BPM not reliably steerable by prompt | M4 scope shrinks | Treated as best-effort from the start; UI follows what works |
 | MRT2 streaming API shifts under us (young project) | Rework in workers | Worker isolates all `magenta_rt` calls behind one small interface |
 | Memory pressure with `mrt2_base` decks | Crashes mid-session | RAM guardrails in model picker (M3); worker-death recovery |
+| FLX4 MIDI map differs from docs / firmware | Dead or wrong controls | Map sourced from the proven Mixxx mapping (docs/midi-ddj-flx4.md); in-app monitor verifies against the device |
+| Web MIDI is Chromium-only | No hardware control elsewhere | Accepted (ADR-0005); on-screen UI unaffected |
