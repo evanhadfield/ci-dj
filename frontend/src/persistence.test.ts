@@ -30,6 +30,17 @@ describe('persistence', () => {
     expect(loadDeckSettings('b').volume).toBe(0.9)
   })
 
+  it('round-trips and clamps deck EQ', () => {
+    updateDeckSettings('a', { eq: { low: 0, mid: 0.5, high: 1 } })
+    expect(loadDeckSettings('a').eq).toEqual({ low: 0, mid: 0.5, high: 1 })
+
+    localStorage.setItem(
+      'magenta-dj:v1',
+      JSON.stringify({ decks: { a: { eq: { low: -3, mid: 'loud', high: 9 } } } }),
+    )
+    expect(loadDeckSettings('a').eq).toBeUndefined() // mid invalid → field dropped
+  })
+
   it('round-trips app settings', () => {
     updateAppSettings({ crossfade: 0.8 })
     expect(loadAppSettings()).toEqual({ crossfade: 0.8 })

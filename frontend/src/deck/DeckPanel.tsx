@@ -8,6 +8,7 @@ import { Slider } from '../ui/Slider'
 import { Stat } from '../ui/Stat'
 import { TextField } from '../ui/TextField'
 import { XYPad } from '../ui/XYPad'
+import { EQ_BANDS, type EqBand } from '../audio/eq'
 import type { DeckId } from '../audio/engine'
 import type { ActiveStyle, DeckState } from './deckState'
 import { padWeights, spawnPosition, type PadPoint } from './padWeights'
@@ -57,24 +58,28 @@ type DeckPanelProps = {
   deckId: DeckId
   state: DeckState
   volume: number
+  eq: Record<EqBand, number>
   onPlay: () => void
   onStop: () => void
   onSetStyle: (style: ActiveStyle) => void
   onSetModel: (model: string) => void
   onRestart: () => void
   onSetVolume: (volume: number) => void
+  onSetEqBand: (band: EqBand, value: number) => void
 }
 
 export function DeckPanel({
   deckId,
   state,
   volume,
+  eq,
   onPlay,
   onStop,
   onSetStyle,
   onSetModel,
   onRestart,
   onSetVolume,
+  onSetEqBand,
 }: DeckPanelProps) {
   const { t } = useTranslation()
   const [targets, setTargets] = useState<(PadPoint & { text: string })[]>(
@@ -307,6 +312,20 @@ export function DeckPanel({
         value={volume}
         onChange={onSetVolume}
       />
+
+      <div className="deck__eq">
+        {EQ_BANDS.map((band) => (
+          <Slider
+            key={band}
+            label={t(`deck.eq.${band}`)}
+            min={0}
+            max={1}
+            step={0.01}
+            value={eq[band]}
+            onChange={(value) => onSetEqBand(band, value)}
+          />
+        ))}
+      </div>
 
       <div className="deck__health">
         <Meter

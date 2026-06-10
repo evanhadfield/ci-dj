@@ -11,8 +11,18 @@ type DeckProps = {
 }
 
 export function Deck({ id, onModelChange }: DeckProps) {
-  const { state, volume, play, stop, setStyle, setModel, restartWorker, setVolume } =
-    useDeck(id)
+  const {
+    state,
+    volume,
+    eq,
+    play,
+    stop,
+    setStyle,
+    setModel,
+    restartWorker,
+    setVolume,
+    setEqBand,
+  } = useDeck(id)
 
   // Report the active model up so the app can warn about the combined RAM
   // footprint across both decks.
@@ -25,12 +35,14 @@ export function Deck({ id, onModelChange }: DeckProps) {
       deckId={id}
       state={state}
       volume={volume}
+      eq={eq}
       onPlay={() => void play()}
       onStop={stop}
       onSetStyle={setStyle}
       onSetModel={setModel}
       onRestart={restartWorker}
       onSetVolume={setVolume}
+      onSetEqBand={setEqBand}
     />
   )
 }

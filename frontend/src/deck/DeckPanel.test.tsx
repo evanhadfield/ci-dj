@@ -13,12 +13,14 @@ function renderPanel(state: Partial<DeckState>, handlers: Record<string, () => v
       deckId="a"
       state={{ ...initialDeckState, ...state }}
       volume={0.8}
+      eq={{ low: 0.5, mid: 0.5, high: 0.5 }}
       onPlay={handlers.onPlay ?? noop}
       onStop={handlers.onStop ?? noop}
       onSetStyle={(handlers.onSetStyle as (s: object) => void) ?? noop}
       onSetModel={(handlers.onSetModel as (m: string) => void) ?? noop}
       onRestart={handlers.onRestart ?? noop}
       onSetVolume={noop}
+      onSetEqBand={(handlers.onSetEqBand as (b: string, v: number) => void) ?? noop}
     />,
   )
 }
@@ -219,6 +221,18 @@ describe('DeckPanel', () => {
     expect(onSetStyle).toHaveBeenCalledTimes(1)
     const style = onSetStyle.mock.calls[0][0]
     expect(style.prompts[0]).toEqual({ text: 'funk', weight: 1 })
+  })
+
+  it('fires per-band EQ changes', () => {
+    const onSetEqBand = vi.fn()
+    renderPanel(
+      { connection: 'open' },
+      { onSetEqBand: onSetEqBand as () => void },
+    )
+    fireEvent.change(screen.getByLabelText('EQ Low'), { target: { value: '0' } })
+    expect(onSetEqBand).toHaveBeenCalledWith('low', 0)
+    fireEvent.change(screen.getByLabelText('EQ Hi'), { target: { value: '0.8' } })
+    expect(onSetEqBand).toHaveBeenCalledWith('high', 0.8)
   })
 
   it('shows the active blend summary', () => {
