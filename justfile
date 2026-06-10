@@ -56,6 +56,8 @@ verify-stream duration="60":
 
 # UI e2e in headless Chromium against a running server.
 verify-ui:
+    cd backend && uv run python scripts/repro_reconnect_echo.py
     cd frontend && node scripts/verify_m2.mjs
     cd frontend && node scripts/verify_m3.mjs
     cd frontend && node scripts/verify_m4.mjs
+    cd frontend && node scripts/verify_m5.mjs

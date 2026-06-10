@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { INITIAL_CROSSFADE, type DeckId } from './audio/engine'
@@ -6,10 +6,34 @@ import { Deck } from './deck/Deck'
 import type { RamInfo } from './deck/deckState'
 import { Mixer } from './mixer/Mixer'
 import { combinedRamWarning } from './ramWarning'
+import { loadAppSettings, updateAppSettings } from './persistence'
+import { handleShortcutKey } from './shortcuts'
+import { useAudioEngine } from './audio/engineContext'
 
 function App() {
   const { t } = useTranslation()
-  const [crossfade, setCrossfade] = useState(INITIAL_CROSSFADE)
+  const engine = useAudioEngine()
+  const [crossfade, setCrossfade] = useState(
+    () => loadAppSettings().crossfade ?? INITIAL_CROSSFADE,
+  )
+
+  // Hand the restored crossfade to the engine once — it holds the position
+  // until the bus is built on first play. Later moves go through
+  // handleCrossfade, so this deliberately ignores `crossfade` updates.
+  useEffect(() => {
+    engine.setCrossfade(crossfade)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine])
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleShortcutKey)
+    return () => window.removeEventListener('keydown', handleShortcutKey)
+  }, [])
+
+  const handleCrossfade = useCallback((position: number) => {
+    setCrossfade(position)
+    updateAppSettings({ crossfade: position })
+  }, [])
   const [deckModels, setDeckModels] = useState<Record<DeckId, string | null>>({
     a: null,
     b: null,
@@ -42,7 +66,8 @@ function App() {
         <Deck id="a" onModelChange={handleModelChange} />
         <Deck id="b" onModelChange={handleModelChange} />
       </div>
-      <Mixer crossfade={crossfade} onCrossfadeChange={setCrossfade} />
+      <Mixer crossfade={crossfade} onCrossfadeChange={handleCrossfade} />
+      <p className="app__hint">{t('app.shortcutsHint')}</p>
     </main>
   )
 }

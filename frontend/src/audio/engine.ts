@@ -9,6 +9,8 @@
  * policy requires a user gesture).
  */
 
+import { encodeWav, floatToInt16 } from './wav'
+
 export type DeckId = 'a' | 'b'
 
 export type DeckChannel = {
@@ -32,10 +34,15 @@ export type AudioEngine = {
   ) => Promise<DeckChannel>
   resume: () => Promise<void>
   setCrossfade: (position: number) => void
+  /** Start capturing the master bus (exactly the speaker feed). */
+  startRecording: () => Promise<void>
+  /** Stop capturing and return the session as a WAV blob. */
+  stopRecording: () => Promise<Blob>
 }
 
 const SAMPLE_RATE = 48_000
 const PARAM_RAMP_SECONDS = 0.02
+const FLUSH_TIMEOUT_MS = 2_000
 
 /** Centre position; the single source for App state and the bus default. */
 export const INITIAL_CROSSFADE = 0.5
@@ -51,12 +58,19 @@ export function equalPowerGains(position: number): { a: number; b: number } {
 
 type Bus = {
   context: AudioContext
+  master: GainNode
   crossfade: Record<DeckId, GainNode>
+}
+
+type Recorder = {
+  node: AudioWorkletNode
+  chunks: Int16Array<ArrayBuffer>[]
 }
 
 export function createAudioEngine(): AudioEngine {
   let busPromise: Promise<Bus> | null = null
   let crossfadePosition = INITIAL_CROSSFADE
+  let recorder: Recorder | null = null
 
   async function buildBus(): Promise<Bus> {
     const context = new AudioContext({ sampleRate: SAMPLE_RATE })
@@ -70,7 +84,7 @@ export function createAudioEngine(): AudioEngine {
       crossfade.b.gain.value = gains.b
       crossfade.a.connect(master)
       crossfade.b.connect(master)
-      return { context, crossfade }
+      return { context, master, crossfade }
     } catch (error) {
       void context.close()
       throw error
@@ -124,6 +138,58 @@ export function createAudioEngine(): AudioEngine {
     async resume() {
       const bus = await ensureBus()
       await bus.context.resume()
+    },
+
+    async startRecording() {
+      if (recorder) return
+      const bus = await ensureBus()
+      if (recorder) return // a concurrent call won the await race
+      const node = new AudioWorkletNode(bus.context, 'pcm-recorder', {
+        numberOfInputs: 1,
+        numberOfOutputs: 0,
+      })
+      const chunks: Int16Array<ArrayBuffer>[] = []
+      node.port.onmessage = (event) => {
+        if (event.data.type === 'pcm') {
+          chunks.push(floatToInt16(event.data.samples as Float32Array))
+        }
+      }
+      bus.master.connect(node)
+      node.port.postMessage({ type: 'start' })
+      recorder = { node, chunks }
+    },
+
+    async stopRecording() {
+      if (!recorder) throw new Error('no recording in progress')
+      const bus = await ensureBus()
+      const { node, chunks } = recorder
+      recorder = null
+      try {
+        // Worklet messages are serviced by the rendering thread; a
+        // suspended context (audio interruption) would otherwise leave the
+        // stop unacknowledged forever.
+        await bus.context.resume()
+        // The worklet flushes its partial batch before acknowledging the
+        // stop, so the file ends exactly where the user stopped.
+        await new Promise<void>((resolve, reject) => {
+          const deadline = setTimeout(
+            () => reject(new Error('recorder did not flush in time')),
+            FLUSH_TIMEOUT_MS,
+          )
+          node.port.onmessage = (event) => {
+            if (event.data.type === 'pcm') {
+              chunks.push(floatToInt16(event.data.samples as Float32Array))
+            } else if (event.data.type === 'done') {
+              clearTimeout(deadline)
+              resolve()
+            }
+          }
+          node.port.postMessage({ type: 'stop' })
+        })
+      } finally {
+        bus.master.disconnect(node)
+      }
+      return encodeWav(chunks, SAMPLE_RATE, 2)
     },
 
     setCrossfade(position) {

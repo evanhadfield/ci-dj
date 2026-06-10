@@ -235,7 +235,14 @@ def test_restart_command_respawns_with_current_model(client, deck):
     with connect(client) as ws:
         ws.receive_json()
         ws.send_json({"type": "restart"})
-        assert ws.receive_json() == {"event": "model_loading", "model": "mrt2_small"}
+        # The pump may report the dead worker before the restart ack lands;
+        # only the ack's content and the respawn matter here. Bounded so a
+        # regression fails instead of hanging.
+        for _ in range(5):
+            event = ws.receive_json()
+            if event["event"] != "worker_died":
+                break
+        assert event == {"event": "model_loading", "model": "mrt2_small"}
         assert wait_until(lambda: deck.restarted_with == ["mrt2_small"])
 
 
