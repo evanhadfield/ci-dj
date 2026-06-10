@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '../ui/Button'
@@ -20,6 +20,36 @@ const MAX_TARGETS = 8
 // Cursor drags re-blend cached embeddings server-side; ~7/s is plenty when
 // styles land at chunk boundaries anyway.
 const STYLE_SEND_INTERVAL_MS = 150
+
+/** Leading+trailing throttle where an immediate send is the chokepoint:
+ * it cancels any pending trailing send, so a stale gesture frame queued
+ * before an add/remove can never overwrite it. */
+function createSendThrottle(intervalMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let last = 0
+  function fire(send: () => void) {
+    clearTimeout(timer)
+    timer = undefined
+    last = Date.now()
+    send()
+  }
+  return {
+    immediate: fire,
+    throttled(send: () => void) {
+      const elapsed = Date.now() - last
+      if (elapsed >= intervalMs) {
+        fire(send)
+      } else {
+        // Trailing send so the gesture's resting place always lands.
+        clearTimeout(timer)
+        timer = setTimeout(() => fire(send), intervalMs - elapsed)
+      }
+    },
+    cancel() {
+      clearTimeout(timer)
+    },
+  }
+}
 
 type DeckPanelProps = {
   deckId: string
@@ -48,9 +78,7 @@ export function DeckPanel({
   const [targets, setTargets] = useState<(PadPoint & { text: string })[]>([])
   const [cursor, setCursor] = useState<PadPoint>({ x: 0.5, y: 0.5 })
   const [targetDraft, setTargetDraft] = useState('')
-  const throttleRef = useRef<{ timer?: ReturnType<typeof setTimeout>; last: number }>({
-    last: 0,
-  })
+  const [throttle] = useState(() => createSendThrottle(STYLE_SEND_INTERVAL_MS))
 
   const connected = state.connection === 'open'
   const operable = connected && !state.switchingModel && !state.workerDied
@@ -79,25 +107,20 @@ export function DeckPanel({
   }
 
   function sendStyle(nextTargets: Target[], nextCursor: PadPoint) {
-    const style = styleFor(nextTargets, nextCursor)
-    if (style) onSetStyle(style)
+    throttle.immediate(() => {
+      const style = styleFor(nextTargets, nextCursor)
+      if (style) onSetStyle(style)
+    })
   }
 
   function sendStyleThrottled(nextTargets: Target[], nextCursor: PadPoint) {
-    const throttle = throttleRef.current
-    clearTimeout(throttle.timer)
-    const elapsed = Date.now() - throttle.last
-    if (elapsed >= STYLE_SEND_INTERVAL_MS) {
-      throttle.last = Date.now()
-      sendStyle(nextTargets, nextCursor)
-    } else {
-      // Trailing send so the gesture's resting place always lands.
-      throttle.timer = setTimeout(() => {
-        throttle.last = Date.now()
-        sendStyle(nextTargets, nextCursor)
-      }, STYLE_SEND_INTERVAL_MS - elapsed)
-    }
+    throttle.throttled(() => {
+      const style = styleFor(nextTargets, nextCursor)
+      if (style) onSetStyle(style)
+    })
   }
+
+  useEffect(() => () => throttle.cancel(), [throttle])
 
   function addTarget() {
     const text = targetDraft.trim()
@@ -139,8 +162,13 @@ export function DeckPanel({
         summary: state.activeStyle.prompts
           .filter((prompt) => prompt.weight >= 0.005)
           .sort((a, b) => b.weight - a.weight)
-          .map((prompt) => `${Math.round(prompt.weight * 100)}% ${prompt.text}`)
-          .join(' · '),
+          .map((prompt) =>
+            t('deck.style.blendItem', {
+              percent: Math.round(prompt.weight * 100),
+              text: prompt.text,
+            }),
+          )
+          .join(t('deck.style.blendSeparator')),
       })
     : ''
 
@@ -184,7 +212,12 @@ export function DeckPanel({
         />
         <Button
           onClick={addTarget}
-          disabled={!operable || !targetDraft.trim() || targets.length >= MAX_TARGETS}
+          disabled={
+            !operable ||
+            !targetDraft.trim() ||
+            targets.length >= MAX_TARGETS ||
+            targets.some((target) => target.text === targetDraft.trim())
+          }
         >
           {t('deck.style.addTarget')}
         </Button>

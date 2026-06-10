@@ -40,6 +40,25 @@ def test_embeddings_are_cached_across_morph_moves():
     assert sorted(calls) == ["funk", "techno"]  # one embed per text, not per move
 
 
+def test_cache_evicts_least_recently_used_not_oldest(monkeypatch):
+    import magenta_dj.engine as engine_module
+
+    monkeypatch.setattr(engine_module, "EMBED_CACHE_SIZE", 2)
+    engine, calls = make_engine(
+        {
+            "funk": np.array([1.0]),
+            "techno": np.array([2.0]),
+            "dub": np.array([3.0]),
+        }
+    )
+    engine.set_style([("funk", 1.0)])
+    engine.set_style([("techno", 1.0)])
+    engine.set_style([("funk", 1.0)])  # refresh funk's recency
+    engine.set_style([("dub", 1.0)])  # evicts techno, not funk
+    engine.set_style([("funk", 1.0)])
+    assert calls == ["funk", "techno", "dub"]  # funk never re-embedded
+
+
 def test_zero_weight_prompts_are_dropped():
     engine, calls = make_engine({"funk": np.array([1.0, 0.0])})
     engine.set_style([("funk", 1.0), ("techno", 0.0)])

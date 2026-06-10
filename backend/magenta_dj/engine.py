@@ -32,8 +32,8 @@ def available_models() -> list[str]:
     return present
 
 
-# Embeddings are reused across morph-slider moves; texts beyond this are
-# evicted oldest-first.
+# Embeddings are reused across pad-cursor moves; least-recently-used texts
+# are evicted, so active pad targets stay cached through a long session.
 EMBED_CACHE_SIZE = 32
 
 
@@ -52,7 +52,10 @@ class DeckEngine:
         self._embed_cache: dict[str, np.ndarray] = {}
 
     def _embed_cached(self, text: str) -> np.ndarray:
-        if text not in self._embed_cache:
+        if text in self._embed_cache:
+            # Refresh recency: dict order is the LRU order.
+            self._embed_cache[text] = self._embed_cache.pop(text)
+        else:
             if len(self._embed_cache) >= EMBED_CACHE_SIZE:
                 self._embed_cache.pop(next(iter(self._embed_cache)))
             self._embed_cache[text] = self._system.embed_style(text)

@@ -24,7 +24,9 @@
       "addTarget": "Add",
       "removeTarget": "Remove {{prompt}}",
       "pad": "Style pad",
-      "active": "Playing: {{summary}}"
+      "active": "Playing: {{summary}}",
+      "blendItem": "{{percent}}% {{text}}",
+      "blendSeparator": " · "
     },
     "play": "Play",
     "stop": "Stop",

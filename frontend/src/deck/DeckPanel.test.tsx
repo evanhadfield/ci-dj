@@ -112,18 +112,51 @@ describe('DeckPanel', () => {
   })
 
   it('moves the cursor by keyboard and sends reweighted styles', () => {
-    const onSetStyle = vi.fn()
-    renderPanel({ connection: 'open' }, { onSetStyle: onSetStyle as () => void })
-    addTarget('funk')
-    addTarget('techno')
-    onSetStyle.mockClear()
+    vi.useFakeTimers()
+    try {
+      const onSetStyle = vi.fn()
+      renderPanel({ connection: 'open' }, { onSetStyle: onSetStyle as () => void })
+      addTarget('funk')
+      addTarget('techno')
+      onSetStyle.mockClear()
 
-    const pad = screen.getByLabelText('Style pad')
-    fireEvent.keyDown(pad, { key: 'ArrowUp' })
-    expect(onSetStyle).toHaveBeenCalledTimes(1)
-    const style = onSetStyle.mock.calls.at(-1)![0]
-    // Two targets sit at 12 and 6 o'clock; moving up favours the first.
-    expect(style.prompts[0].weight).toBeGreaterThan(style.prompts[1].weight)
+      const pad = screen.getByLabelText('Style pad')
+      fireEvent.keyDown(pad, { key: 'ArrowUp' })
+      vi.advanceTimersByTime(300) // inside the throttle window → trailing send
+      expect(onSetStyle).toHaveBeenCalledTimes(1)
+      const style = onSetStyle.mock.calls.at(-1)![0]
+      // Two targets sit at 12 and 6 o'clock; moving up favours the first.
+      expect(style.prompts[0].weight).toBeGreaterThan(style.prompts[1].weight)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('never resurrects a removed target via a stale trailing send', () => {
+    vi.useFakeTimers()
+    try {
+      const onSetStyle = vi.fn()
+      renderPanel({ connection: 'open' }, { onSetStyle: onSetStyle as () => void })
+      addTarget('funk')
+      addTarget('techno')
+
+      // Two quick cursor moves: the second lands inside the throttle window
+      // and queues a trailing send that still references both targets.
+      const pad = screen.getByLabelText('Style pad')
+      fireEvent.keyDown(pad, { key: 'ArrowUp' })
+      fireEvent.keyDown(pad, { key: 'ArrowUp' })
+
+      // Remove funk before the trailing send fires.
+      fireEvent.click(screen.getByRole('button', { name: 'Remove funk' }))
+      vi.advanceTimersByTime(500)
+
+      const finalStyle = onSetStyle.mock.calls.at(-1)![0]
+      expect(
+        finalStyle.prompts.map((prompt: { text: string }) => prompt.text),
+      ).toEqual(['techno'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('drags a target dot under the cursor and resends its dominant weight', () => {
