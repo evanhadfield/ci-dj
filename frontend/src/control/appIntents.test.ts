@@ -110,6 +110,18 @@ describe('applyAppIntent', () => {
     expect(a.stop).not.toHaveBeenCalled()
   })
 
+  it('routes the FX amount to the addressed deck', () => {
+    const a = fakeDeck()
+    const b = fakeDeck()
+    applyAppIntent(
+      { kind: 'fx_amount', deck: 'b', value: 0.7 },
+      decks(a, b),
+      noHandlers,
+    )
+    expect(b.setFxAmount).toHaveBeenCalledWith(0.7)
+    expect(a.setFxAmount).not.toHaveBeenCalled()
+  })
+
   it('hands crossfade to the callback', () => {
     const onCrossfade = vi.fn()
     applyAppIntent(

@@ -47,6 +47,9 @@ export function applyAppIntent(
       deck.setCue(!deck.cue)
       return
     }
+    case 'fx_amount':
+      decks[intent.deck].setFxAmount(intent.value)
+      return
     case 'crossfade':
       handlers.onCrossfade(intent.value)
       return

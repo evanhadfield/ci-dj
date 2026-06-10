@@ -31,6 +31,10 @@ const PLAY_NOTE = 0x0b
 const RECORD_NOTE = 0x47
 export const CHANNEL_CUE_NOTE = 0x54
 export const TRANSPORT_CUE_NOTE = 0x0c
+/** SHIFT is a software modifier (ADR-0008): the firmware reports press
+ * and release as plain notes and the knobs keep their CCs, so held
+ * state is tracked here per deck. */
+export const SHIFT_NOTE = 0x3f
 export const PAD_COUNT = 8
 
 const CC_DECK: Partial<Record<number, DeckId>> = { 0xb0: 'a', 0xb1: 'b' }
@@ -39,10 +43,13 @@ const LSB_OFFSET = 0x20
 const MAX_14BIT = (127 << 7) | 127
 
 /** Builders keyed by MSB CC number, per status byte. The LSB lives on
- * CC+0x20 and is resolved back to these entries. */
+ * CC+0x20 and is resolved back to these entries. Resolved per message,
+ * so the SMART CFX rows can read the live shift state (M12): bare knob
+ * rides the Color FX amount, SHIFT + knob sweeps the style cursor. */
 function ccBuilder(
   status: number,
   cc: number,
+  shift: Record<DeckId, boolean>,
 ): ((value: number) => ControlIntent) | null {
   const deck = CC_DECK[status]
   if (deck) {
@@ -63,9 +70,13 @@ function ccBuilder(
       case 0x1f:
         return (value) => ({ kind: 'crossfade', value })
       case 0x17:
-        return (value) => ({ kind: 'style_sweep', deck: 'a', value })
+        return shift.a
+          ? (value) => ({ kind: 'style_sweep', deck: 'a', value })
+          : (value) => ({ kind: 'fx_amount', deck: 'a', value })
       case 0x18:
-        return (value) => ({ kind: 'style_sweep', deck: 'b', value })
+        return shift.b
+          ? (value) => ({ kind: 'style_sweep', deck: 'b', value })
+          : (value) => ({ kind: 'fx_amount', deck: 'b', value })
       case 0x0c:
         return (value) => ({ kind: 'cue_mix', value })
     }
@@ -96,16 +107,25 @@ export type Flx4Translator = (data: ArrayLike<number>) => ControlIntent | null
 
 export function createFlx4Translator(): Flx4Translator {
   const msbByControl = new Map<number, number>()
+  const shiftHeld: Record<DeckId, boolean> = { a: false, b: false }
   return (data) => {
     if (data.length < 3) return null
     const [status, number, value] = [data[0], data[1], data[2]]
 
-    const msbBuild = ccBuilder(status, number)
+    // SHIFT held-state, tracked from press AND release — so this must
+    // run before the velocity-0 drop below.
+    const shiftDeck = NOTE_ON_DECK[status]
+    if (shiftDeck && number === SHIFT_NOTE) {
+      shiftHeld[shiftDeck] = value > 0
+      return null
+    }
+
+    const msbBuild = ccBuilder(status, number, shiftHeld)
     if (msbBuild) {
       msbByControl.set((status << 8) | number, value)
       return msbBuild((value << 7) / MAX_14BIT)
     }
-    const lsbBuild = ccBuilder(status, number - LSB_OFFSET)
+    const lsbBuild = ccBuilder(status, number - LSB_OFFSET, shiftHeld)
     if (lsbBuild) {
       const msb = msbByControl.get((status << 8) | (number - LSB_OFFSET))
       // An LSB with no MSB seen yet would jump the control to near zero;
