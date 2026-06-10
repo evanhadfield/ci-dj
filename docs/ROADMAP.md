@@ -287,25 +287,24 @@ surface; before/after screenshots in the PR.
 half of DJing the booth still lacks. With deck A on air, prime deck B,
 listen to it in headphones, and only then fade it in.
 
-Architecture sketch (gets its own ADR): the FLX4 doubles as a 4-channel
-USB audio interface — measured on this unit via `system_profiler`:
-4 output channels at 48 kHz, matching the engine's sample rate — with
-USB channels 1/2 feeding the MASTER RCA and 3/4 the headphone jack
-(the same routing rekordbox uses). Primary path: one AudioContext,
-`setSinkId(flx4)`, `destination.channelCount = 4`, a ChannelMerger with
-the master bus on 1/2 and the cue bus on 3/4. Fallback for FLX4-less
-sessions: cue bus → `MediaStreamAudioDestinationNode` → an `<audio>`
-element `setSinkId`-routed to any second device, master staying on the
-default sink.
+Architecture
+([ADR-0006](adr/0006-cue-output-via-a-second-audio-sink.md), settled by
+spike): Chromium's Web Audio output is stereo per sink — after
+`setSinkId(flx4)`, `maxChannelCount` reports 2, so the FLX4's 4-channel
+USB path (phones on 3/4) is unreachable despite the hardware supporting
+it (measured in `frontend/scripts/spike_cue_routing.mjs`). The cue feed
+therefore goes out a **second sink**: master bus stays on
+`context.destination`, cue bus → `MediaStreamAudioDestinationNode` → an
+`<audio>` element `setSinkId`-routed to a user-chosen second device
+(laptop jack, Bluetooth, built-ins). Intended FLX4 setup: system default
+output = FLX4 (master RCA → speakers), headphones on the second device.
 
 Scope, ordered by risk:
 
-1. **Output-routing spike.** Verify 4-channel output through
-   `AudioContext.setSinkId` + ChannelMerger against the physical FLX4
-   (Chromium has a history of `maxChannelCount` quirks with sink
-   changes — measure, don't read). Pick primary/fallback and record the
-   decision as the next ADR. Includes the `enumerateDevices` permission
-   flow needed to obtain device IDs.
+1. **Output-routing spike.** Done — see ADR-0006 and the spike script;
+   the single-context 4-channel path is rejected on measurement, the
+   dual-sink path verified working. Includes the `enumerateDevices`
+   permission flow needed to obtain device IDs (one-off mic grant).
 2. **Cue bus in the engine.** Per-deck post-EQ, pre-fader tap → per-channel
    cue toggle gain → cue bus, plus a cue/master blend ("MIXING") gain pair
    for the headphone feed. Master bus, meters, and the recorder are
