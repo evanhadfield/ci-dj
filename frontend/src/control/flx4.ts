@@ -3,8 +3,10 @@
  * The translator is a pure function of the message stream apart from one
  * piece of state: faders and knobs arrive as 14-bit pairs (MSB on the listed
  * CC, LSB on CC+0x20), so the last MSB per control is cached and combined
- * with the LSB that follows. Everything not in the map — shift layers, jog
- * wheels, releases — translates to null. */
+ * with the LSB that follows. Each physical move therefore emits two intents
+ * on the bus — a coarse one on the MSB, refined when the LSB lands —
+ * inaudible at 14-bit resolution but visible to subscribers. Everything not
+ * in the map — shift layers, jog wheels, releases — translates to null. */
 
 import type { DeckId } from '../audio/engine'
 import type { ControlIntent } from './bus'

@@ -47,13 +47,14 @@ export function createMidiLink({
       ? () => navigator.requestMIDIAccess()
       : null)
 
+  let access: MIDIAccess | null = null
   let input: MIDIInput | null = null
   let output: MIDIOutput | null = null
 
   // Re-scan on every state change so unplugging and replugging the deck
   // mid-set recovers without another permission round-trip.
-  function bind(access: MIDIAccess) {
-    const nextInput = findFlx4(access.inputs)
+  function bind(granted: MIDIAccess) {
+    const nextInput = findFlx4(granted.inputs)
     if (nextInput !== input) {
       if (input) input.onmidimessage = null
       input = nextInput
@@ -63,26 +64,33 @@ export function createMidiLink({
         }
       }
     }
-    output = findFlx4(access.outputs)
+    output = findFlx4(granted.outputs)
     onStatus(input ? 'connected' : 'no-device', input?.name ?? null)
   }
 
   return {
     async connect() {
+      // Access already granted (a no-device retry): just re-scan, keeping
+      // the existing statechange handler single-bound.
+      if (access) {
+        bind(access)
+        return
+      }
       if (!request) {
         onStatus('unsupported', null)
         return
       }
       onStatus('requesting', null)
-      let access: MIDIAccess
+      let granted: MIDIAccess
       try {
-        access = await request()
+        granted = await request()
       } catch {
         onStatus('denied', null)
         return
       }
-      access.onstatechange = () => bind(access)
-      bind(access)
+      access = granted
+      granted.onstatechange = () => bind(granted)
+      bind(granted)
     },
     send(data) {
       output?.send(data)

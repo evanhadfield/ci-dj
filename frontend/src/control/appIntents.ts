@@ -1,4 +1,5 @@
 import type { DeckId } from '../audio/engine'
+import { isDeckOperable } from '../deck/deckState'
 import type { DeckControls } from '../deck/useDeck'
 import type { ControlIntent } from './bus'
 
@@ -14,13 +15,9 @@ export function applyAppIntent(
   switch (intent.kind) {
     case 'play_toggle': {
       const deck = decks[intent.deck]
-      // Mirror the transport button's gating: hardware must not start a
+      // Same gating as the transport button: hardware must not start a
       // deck the UI would refuse to.
-      const operable =
-        deck.state.connection === 'open' &&
-        !deck.state.switchingModel &&
-        !deck.state.workerDied
-      if (!operable) return
+      if (!isDeckOperable(deck.state)) return
       if (deck.state.playing) deck.stop()
       else void deck.play()
       return

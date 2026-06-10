@@ -62,11 +62,6 @@ export function MixerStrip({ channels, crossfade, onCrossfadeChange }: MixerStri
     return () => clearInterval(ticker)
   }, [recording])
 
-  function handleCrossfade(position: number) {
-    onCrossfadeChange(position)
-    engine.setCrossfade(position)
-  }
-
   async function toggleRecording() {
     setBusy(true)
     try {
@@ -144,7 +139,7 @@ export function MixerStrip({ channels, crossfade, onCrossfadeChange }: MixerStri
             step={0.01}
             value={crossfade}
             data-shortcut="crossfade"
-            onChange={handleCrossfade}
+            onChange={onCrossfadeChange}
           />
         </div>
         <span className="mixer__edge">{t('mixer.deckB')}</span>

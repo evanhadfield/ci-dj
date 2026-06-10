@@ -12,7 +12,7 @@ import { TextField } from '../ui/TextField'
 import { TransportButton } from '../ui/TransportButton'
 import { WaveformStrip } from '../ui/WaveformStrip'
 import { XYPad } from '../ui/XYPad'
-import type { ActiveStyle, DeckState } from './deckState'
+import { isDeckOperable, type ActiveStyle, type DeckState } from './deckState'
 import { padWeights, spawnPosition, sweepPosition, type PadPoint } from './padWeights'
 import { loadDeckSettings, updateDeckSettings } from '../persistence'
 import './deck.css'
@@ -91,7 +91,7 @@ export function DeckColumn({
   const [throttle] = useState(() => createSendThrottle(STYLE_SEND_INTERVAL_MS))
 
   const connected = state.connection === 'open'
-  const operable = connected && !state.switchingModel && !state.workerDied
+  const operable = isDeckOperable(state)
   const statusKey = state.switchingModel
     ? 'deck.status.loadingModel'
     : {

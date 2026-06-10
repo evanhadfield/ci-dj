@@ -36,10 +36,16 @@ function App() {
     return () => window.removeEventListener('keydown', handleShortcutKey)
   }, [])
 
-  const handleCrossfade = useCallback((position: number) => {
-    setCrossfade(position)
-    updateAppSettings({ crossfade: position })
-  }, [])
+  // The one place a crossfade move is defined: audio bus + state + persist.
+  // Every source — slider, keyboard, hardware — lands here.
+  const handleCrossfade = useCallback(
+    (position: number) => {
+      engine.setCrossfade(position)
+      setCrossfade(position)
+      updateAppSettings({ crossfade: position })
+    },
+    [engine],
+  )
 
   // Hardware intents (ADR-0005) for the state this component owns.
   // Resubscribes every render so the handler always reads current deck
@@ -47,10 +53,7 @@ function App() {
   const bus = useControlBus()
   useEffect(() =>
     bus.subscribe((intent) =>
-      applyAppIntent(intent, { a: deckA, b: deckB }, (position) => {
-        engine.setCrossfade(position)
-        handleCrossfade(position)
-      }),
+      applyAppIntent(intent, { a: deckA, b: deckB }, handleCrossfade),
     ),
   )
 
@@ -65,6 +68,14 @@ function App() {
       previous[deck] === count ? previous : { ...previous, [deck]: count },
     )
   }, [])
+  const handleTargetCountA = useCallback(
+    (count: number) => handleTargetCount('a', count),
+    [handleTargetCount],
+  )
+  const handleTargetCountB = useCallback(
+    (count: number) => handleTargetCount('b', count),
+    [handleTargetCount],
+  )
 
   // LED feedback (M7 stretch): pads 1–N lit for the N style targets, re-sent
   // on reconnect so a hot-plugged controller picks the state back up.
@@ -123,7 +134,7 @@ function App() {
           onSetStyle={deckA.setStyle}
           onSetModel={deckA.setModel}
           onRestart={deckA.restartWorker}
-          onTargetCount={(count) => handleTargetCount('a', count)}
+          onTargetCount={handleTargetCountA}
         />
         <MixerStrip
           channels={channels}
@@ -139,7 +150,7 @@ function App() {
           onSetStyle={deckB.setStyle}
           onSetModel={deckB.setModel}
           onRestart={deckB.restartWorker}
-          onTargetCount={(count) => handleTargetCount('b', count)}
+          onTargetCount={handleTargetCountB}
         />
       </div>
     </main>

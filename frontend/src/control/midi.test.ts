@@ -23,12 +23,15 @@ function fakeAccess(inputs: FakePort[], outputs: FakePort[] = []) {
 function createLink(access: ReturnType<typeof fakeAccess>) {
   const statuses: Array<[MidiStatus, string | null]> = []
   const onMessage = vi.fn()
+  const requestAccess = vi.fn(() =>
+    Promise.resolve(access as unknown as MIDIAccess),
+  )
   const link = createMidiLink({
     onMessage,
     onStatus: (status, deviceName) => statuses.push([status, deviceName]),
-    requestAccess: () => Promise.resolve(access as unknown as MIDIAccess),
+    requestAccess,
   })
-  return { link, statuses, onMessage }
+  return { link, statuses, onMessage, requestAccess }
 }
 
 describe('createMidiLink', () => {
@@ -79,6 +82,18 @@ describe('createMidiLink', () => {
     })
     await link.connect()
     expect(statuses).toEqual(['requesting', 'denied'])
+  })
+
+  it('reuses the granted access on a retry instead of re-requesting', async () => {
+    const access = fakeAccess([])
+    const { link, statuses, requestAccess } = createLink(access)
+    await link.connect()
+    expect(statuses.at(-1)).toEqual(['no-device', null])
+
+    access.inputs.set('in-late', fakePort('DDJ-FLX4'))
+    await link.connect()
+    expect(requestAccess).toHaveBeenCalledTimes(1)
+    expect(statuses.at(-1)).toEqual(['connected', 'DDJ-FLX4'])
   })
 
   it('picks up a device hot-plugged after connect', async () => {
