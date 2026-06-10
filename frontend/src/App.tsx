@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { INITIAL_CROSSFADE, type DeckId } from './audio/engine'
+import { INITIAL_CROSSFADE, INITIAL_CUE_MIX, type DeckId } from './audio/engine'
+import { startCueStream } from './audio/cueStream'
 import { useAudioEngine } from './audio/engineContext'
+import type { AudioOutputDevice } from './audio/outputs'
 import { applyAppIntent } from './control/appIntents'
 import { useControlBus } from './control/busContext'
+import {
+  CHANNEL_CUE_NOTE,
+  NOTE_ON_STATUS_BY_DECK,
+  TRANSPORT_CUE_NOTE,
+} from './control/flx4'
 import { MidiControls } from './control/MidiControls'
 import { useMidi } from './control/useMidi'
 import { DeckColumn } from './deck/DeckColumn'
@@ -22,12 +29,38 @@ function App() {
   const [crossfade, setCrossfade] = useState(
     () => loadAppSettings().crossfade ?? INITIAL_CROSSFADE,
   )
+  const [cueMix, setCueMix] = useState(
+    () => loadAppSettings().cueMix ?? INITIAL_CUE_MIX,
+  )
+  const [cueDevice, setCueDevice] = useState<AudioOutputDevice | null>(
+    () => loadAppSettings().cueDevice ?? null,
+  )
 
-  // Hand the restored crossfade to the engine once — it holds the position
-  // until the bus is built on first play. Later moves go through
-  // handleCrossfade, so this deliberately ignores `crossfade` updates.
+  // A live backend cue stream's stop function (ADR-0007); null while the
+  // cue rides a browser sink or is off. The token guards the async hops:
+  // only the latest routing attempt may install its stream — a stale one
+  // stops itself instead of overwriting a newer pick.
+  const cueStreamStop = useRef<(() => void) | null>(null)
+  const cueRouteToken = useRef(0)
+
+  // Hand the restored mix positions and cue device to the engine once —
+  // it holds them until the bus is built on first play. Later moves go
+  // through the handlers, so this deliberately ignores state updates.
+  // A vanished cue device fails silently here; re-picking recovers.
   useEffect(() => {
     engine.setCrossfade(crossfade)
+    engine.setCueMix(cueMix)
+    if (cueDevice?.backend) {
+      const token = ++cueRouteToken.current
+      void startCueStream(engine, cueDevice.deviceId)
+        .then((stop) => {
+          if (token === cueRouteToken.current) cueStreamStop.current = stop
+          else stop()
+        })
+        .catch(() => {})
+    } else if (cueDevice) {
+      void engine.setCueDevice(cueDevice.deviceId).catch(() => {})
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine])
 
@@ -47,18 +80,67 @@ function App() {
     [engine],
   )
 
+  // The one place a cue-mix move is defined, mirroring handleCrossfade.
+  const handleCueMix = useCallback(
+    (position: number) => {
+      engine.setCueMix(position)
+      setCueMix(position)
+      updateAppSettings({ cueMix: position })
+    },
+    [engine],
+  )
+
+  const handleCueDevice = useCallback(
+    async (device: AudioOutputDevice | null) => {
+      const token = ++cueRouteToken.current
+      // The previous stream stops eagerly — the backend sink takes one
+      // client, so a jack-to-jack switch must free it first.
+      cueStreamStop.current?.()
+      cueStreamStop.current = null
+      if (device?.backend) {
+        await engine.setCueDevice(null)
+        let stop: () => void
+        try {
+          stop = await startCueStream(engine, device.deviceId)
+        } catch (cause) {
+          // The old route is already torn down, so show reality (Off) —
+          // but don't persist it: a reload restores the last good route.
+          if (token === cueRouteToken.current) setCueDevice(null)
+          throw cause
+        }
+        if (token !== cueRouteToken.current) {
+          stop()
+          return
+        }
+        cueStreamStop.current = stop
+      } else {
+        await engine.setCueDevice(device?.deviceId ?? null)
+        if (token !== cueRouteToken.current) return
+      }
+      // State and persistence reflect only routes that actually took:
+      // a failed pick must not survive a reload.
+      setCueDevice(device)
+      updateAppSettings({ cueDevice: device })
+    },
+    [engine],
+  )
+
   // Hardware intents (ADR-0005) for the state this component owns.
   // Resubscribes every render so the handler always reads current deck
   // state; the bus itself is a stable singleton.
   const bus = useControlBus()
   useEffect(() =>
     bus.subscribe((intent) =>
-      applyAppIntent(intent, { a: deckA, b: deckB }, handleCrossfade),
+      applyAppIntent(
+        intent,
+        { a: deckA, b: deckB },
+        { onCrossfade: handleCrossfade, onCueMix: handleCueMix },
+      ),
     ),
   )
 
   const midi = useMidi()
-  const { status: midiStatus, setPadLeds } = midi
+  const { status: midiStatus, setLed, setPadLeds } = midi
   const [padCounts, setPadCounts] = useState<Record<DeckId, number>>({
     a: 0,
     b: 0,
@@ -85,6 +167,23 @@ function App() {
     setPadLeds('b', padCounts.b)
   }, [midiStatus, setPadLeds, padCounts])
 
+  // Cue LEDs (M10): channel CUE mirrors the headphone-cue toggles,
+  // transport CUE lights while a deck is primed off air.
+  useEffect(() => {
+    if (midiStatus !== 'connected') return
+    setLed(NOTE_ON_STATUS_BY_DECK.a, CHANNEL_CUE_NOTE, deckA.cue)
+    setLed(NOTE_ON_STATUS_BY_DECK.b, CHANNEL_CUE_NOTE, deckB.cue)
+    setLed(NOTE_ON_STATUS_BY_DECK.a, TRANSPORT_CUE_NOTE, deckA.primed)
+    setLed(NOTE_ON_STATUS_BY_DECK.b, TRANSPORT_CUE_NOTE, deckB.primed)
+  }, [
+    midiStatus,
+    setLed,
+    deckA.cue,
+    deckB.cue,
+    deckA.primed,
+    deckB.primed,
+  ])
+
   const ramWarning = combinedRamWarning(
     { a: deckA.state.model, b: deckB.state.model },
     deckA.state.ramInfo ?? deckB.state.ramInfo,
@@ -94,15 +193,19 @@ function App() {
     a: {
       volume: deckA.volume,
       eq: deckA.eq,
+      cue: deckA.cue,
       onSetVolume: deckA.setVolume,
       onSetEqBand: deckA.setEqBand,
+      onSetCue: deckA.setCue,
       getLevel: deckA.getChannelLevel,
     },
     b: {
       volume: deckB.volume,
       eq: deckB.eq,
+      cue: deckB.cue,
       onSetVolume: deckB.setVolume,
       onSetEqBand: deckB.setEqBand,
+      onSetCue: deckB.setCue,
       getLevel: deckB.getChannelLevel,
     },
   }
@@ -135,11 +238,16 @@ function App() {
           onSetModel={deckA.setModel}
           onRestart={deckA.restartWorker}
           onTargetCount={handleTargetCountA}
+          primed={deckA.primed}
         />
         <MixerStrip
           channels={channels}
           crossfade={crossfade}
           onCrossfadeChange={handleCrossfade}
+          cueMix={cueMix}
+          onCueMixChange={handleCueMix}
+          cueDevice={cueDevice}
+          onCueDeviceChange={handleCueDevice}
         />
         <DeckColumn
           deckId="b"
@@ -151,6 +259,7 @@ function App() {
           onSetModel={deckB.setModel}
           onRestart={deckB.restartWorker}
           onTargetCount={handleTargetCountB}
+          primed={deckB.primed}
         />
       </div>
     </main>

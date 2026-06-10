@@ -26,6 +26,14 @@
     "crossfade": "Crossfade",
     "deckA": "A",
     "deckB": "B",
+    "cue": "Cue",
+    "phones": "Phones",
+    "cueMix": "Cue mix",
+    "phonesOutput": "Phones out",
+    "phonesOff": "Off",
+    "phonesScan": "Find devices",
+    "phonesJack": "{{name}} — phones jack",
+    "phonesError": "Phones output failed: {{message}}",
     "record": "Record",
     "stopRecording": "Stop recording",
     "recordingFor": "REC {{time}}",
@@ -63,7 +71,8 @@
       "connecting": "Connecting…",
       "connected": "Connected",
       "disconnected": "Disconnected — retrying",
-      "loadingModel": "Loading model…"
+      "loadingModel": "Loading model…",
+      "primed": "Primed — off air"
     },
     "health": {
       "buffer": "Buffer",

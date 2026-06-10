@@ -61,6 +61,8 @@ function makeFakeEngine(overrides: Partial<AudioEngine> = {}) {
     reset: vi.fn(),
     setVolume: vi.fn(),
     setEq: vi.fn(),
+    setCue: vi.fn(),
+    setOnAir: vi.fn(),
     getLevel: vi.fn(() => 0),
     getWaveformRange: vi.fn(() => [0, 0] as [number, number]),
     dispose: vi.fn(),
@@ -69,6 +71,10 @@ function makeFakeEngine(overrides: Partial<AudioEngine> = {}) {
     createDeckChannel: vi.fn(async () => channel),
     resume: vi.fn(async () => {}),
     setCrossfade: vi.fn(),
+    setCueMix: vi.fn(),
+    setCueDevice: vi.fn(async () => {}),
+    startCueCapture: vi.fn(async () => {}),
+    stopCueCapture: vi.fn(),
     startRecording: vi.fn(async () => {}),
     stopRecording: vi.fn(async () => new Blob()),
     getMasterLevel: vi.fn(() => 0),
@@ -228,6 +234,56 @@ describe('useDeck connection', () => {
     updateDeckSettings('a', { volume: 0.55 })
     const { result } = renderDeck(makeFakeEngine().engine)
     expect(result.current.volume).toBe(0.55)
+  })
+
+  it('primes off air and drops on air without flushing the prepped buffer', async () => {
+    const { engine, channel } = makeFakeEngine()
+    const { result } = renderDeck(engine)
+    act(() => socket(0).serverOpen())
+
+    await act(() => result.current.prime())
+    expect(channel.setOnAir).toHaveBeenLastCalledWith(false)
+    expect(result.current.primed).toBe(true)
+    expect(socket(0).sent).toEqual([JSON.stringify({ type: 'play' })])
+
+    vi.mocked(channel.reset).mockClear()
+    await act(() => result.current.play())
+    expect(channel.setOnAir).toHaveBeenLastCalledWith(true)
+    expect(result.current.primed).toBe(false)
+    // The drop must not flush the prepped audio or re-send play.
+    expect(channel.reset).not.toHaveBeenCalled()
+    expect(socket(0).sent).toEqual([JSON.stringify({ type: 'play' })])
+  })
+
+  it('stop while primed flushes and puts the channel back on air', async () => {
+    const { engine, channel } = makeFakeEngine()
+    const { result } = renderDeck(engine)
+    act(() => socket(0).serverOpen())
+
+    await act(() => result.current.prime())
+    act(() => result.current.stop())
+    expect(result.current.primed).toBe(false)
+    expect(channel.reset).toHaveBeenCalled()
+    expect(channel.setOnAir).toHaveBeenLastCalledWith(true)
+  })
+
+  it('seeds a pre-play cue toggle into the channel and routes live ones', async () => {
+    const { engine, channel } = makeFakeEngine()
+    const { result } = renderDeck(engine)
+
+    // Toggled before the channel exists — must ride along at creation.
+    act(() => result.current.setCue(true))
+    expect(result.current.cue).toBe(true)
+
+    act(() => socket(0).serverOpen())
+    await act(() => result.current.play())
+    expect(vi.mocked(engine.createDeckChannel).mock.calls[0][1]).toMatchObject({
+      cue: true,
+    })
+
+    act(() => result.current.setCue(false))
+    expect(channel.setCue).toHaveBeenCalledWith(false)
+    expect(result.current.cue).toBe(false)
   })
 
   it('surfaces malformed frames as dropped, not crashes', () => {
