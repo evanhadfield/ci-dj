@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createControlBus, type ControlBus } from './bus'
 import { ControlBusProvider } from './ControlBusProvider'
 import { MidiControls } from './MidiControls'
+import { useMidi } from './useMidi'
 
 type FakeInput = {
   name: string
@@ -29,10 +30,23 @@ function clearMidiAccess() {
   })
 }
 
+/** App owns useMidi and passes the result down; mirror that here. */
+function Harness() {
+  const midi = useMidi()
+  return (
+    <MidiControls
+      status={midi.status}
+      deviceName={midi.deviceName}
+      onConnect={midi.connect}
+      readMonitor={midi.readMonitor}
+    />
+  )
+}
+
 function renderControls(bus: ControlBus = createControlBus()) {
   return render(
     <ControlBusProvider bus={bus}>
-      <MidiControls />
+      <Harness />
     </ControlBusProvider>,
   )
 }

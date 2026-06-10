@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '../ui/Button'
-import { useMidi, type MidiMonitorEntry } from './useMidi'
+import type { MidiStatus } from './midi'
+import type { MidiMonitorEntry } from './useMidi'
 import './control.css'
 
 const MONITOR_POLL_MS = 150
@@ -41,18 +42,30 @@ function MidiMonitor({
   )
 }
 
+type MidiControlsProps = {
+  status: MidiStatus
+  deviceName: string | null
+  onConnect: () => void
+  readMonitor: () => MidiMonitorEntry[]
+}
+
 /** Statusbar cluster for hardware control: connect button (MIDI access
- * needs a user gesture), connection LED, and the raw-byte monitor. */
-export function MidiControls() {
+ * needs a user gesture), connection LED, and the raw-byte monitor.
+ * Presentational — App owns the useMidi hook so it can drive pad LEDs. */
+export function MidiControls({
+  status,
+  deviceName,
+  onConnect,
+  readMonitor,
+}: MidiControlsProps) {
   const { t } = useTranslation()
-  const { status, deviceName, connect, readMonitor } = useMidi()
   const connected = status === 'connected'
 
   return (
     <div className="midi">
       {connected && <MidiMonitor readMonitor={readMonitor} />}
       {!connected && status !== 'unsupported' && (
-        <Button onClick={connect} disabled={status === 'requesting'}>
+        <Button onClick={onConnect} disabled={status === 'requesting'}>
           {t('midi.connect')}
         </Button>
       )}

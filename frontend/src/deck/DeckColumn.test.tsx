@@ -25,6 +25,7 @@ function renderPanel(
         onSetStyle={(handlers.onSetStyle as (s: object) => void) ?? noop}
         onSetModel={(handlers.onSetModel as (m: string) => void) ?? noop}
         onRestart={handlers.onRestart ?? noop}
+        onTargetCount={handlers.onTargetCount as (count: number) => void}
       />
     </ControlBusProvider>,
   )
@@ -294,6 +295,16 @@ describe('DeckColumn', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'generation failed; deck stopped',
     )
+  })
+
+  it('reports the style target count for the pad LED echo', () => {
+    const onTargetCount = vi.fn()
+    renderPanel({ connection: 'open' }, { onTargetCount: onTargetCount as () => void })
+    expect(onTargetCount).toHaveBeenLastCalledWith(0)
+    addTarget('funk')
+    expect(onTargetCount).toHaveBeenLastCalledWith(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove funk' }))
+    expect(onTargetCount).toHaveBeenLastCalledWith(0)
   })
 
   it('snaps the cursor onto a pad target from the control bus', () => {

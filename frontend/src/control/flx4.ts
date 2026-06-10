@@ -10,11 +10,16 @@ import type { DeckId } from '../audio/engine'
 import type { ControlIntent } from './bus'
 
 const NOTE_ON_DECK: Partial<Record<number, DeckId>> = { 0x90: 'a', 0x91: 'b' }
-const PAD_DECK: Partial<Record<number, DeckId>> = { 0x97: 'a', 0x99: 'b' }
+/** Pad bank status bytes, shared with the LED echo (same status out). */
+export const PAD_STATUS_BY_DECK: Record<DeckId, number> = { a: 0x97, b: 0x99 }
+const PAD_DECK: Partial<Record<number, DeckId>> = {
+  [PAD_STATUS_BY_DECK.a]: 'a',
+  [PAD_STATUS_BY_DECK.b]: 'b',
+}
 const BEAT_FX_STATUSES = [0x94, 0x95]
 const PLAY_NOTE = 0x0b
 const RECORD_NOTE = 0x47
-const PAD_COUNT = 8
+export const PAD_COUNT = 8
 
 const CC_DECK: Partial<Record<number, DeckId>> = { 0xb0: 'a', 0xb1: 'b' }
 const MIXER_STATUS = 0xb6

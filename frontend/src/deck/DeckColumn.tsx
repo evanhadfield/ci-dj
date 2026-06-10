@@ -65,6 +65,8 @@ type DeckColumnProps = {
   onSetStyle: (style: ActiveStyle) => void
   onSetModel: (model: string) => void
   onRestart: () => void
+  /** Reports how many style targets exist (for the pad LED echo). */
+  onTargetCount?: (count: number) => void
 }
 
 export function DeckColumn({
@@ -76,6 +78,7 @@ export function DeckColumn({
   onSetStyle,
   onSetModel,
   onRestart,
+  onTargetCount,
 }: DeckColumnProps) {
   const { t } = useTranslation()
   const [targets, setTargets] = useState<(PadPoint & { text: string })[]>(
@@ -133,6 +136,10 @@ export function DeckColumn({
   useEffect(() => {
     updateDeckSettings(deckId, { targets, cursor })
   }, [deckId, targets, cursor])
+
+  useEffect(() => {
+    onTargetCount?.(targets.length)
+  }, [targets.length, onTargetCount])
 
   // The worker has no style after a reload, a model switch, or a crash
   // restart — re-apply the pad's arrangement once per such episode, as soon
