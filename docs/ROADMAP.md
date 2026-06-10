@@ -356,6 +356,12 @@ mapping row; verified on the physical device against the checklist.
 
 ## M11 — FLX4 phones jack: backend cue sink
 
+**Status: 🔶 built (2026-06-10), pending hardware verification.** Backend
+sink (sounddevice, drift-bounded FIFO, one-client socket), browser
+capture + stream, and the picker integration shipped and unit-tested on
+both sides; verification is the M11 section of
+[`m9-m10-hardware-checklist.md`](m9-m10-hardware-checklist.md).
+
 **Goal:** cue through the controller's own headphone jack — master on
 the FLX4's RCA, phones on its jack, one USB cable, no Bluetooth.
 Architecture in

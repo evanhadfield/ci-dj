@@ -1,4 +1,4 @@
-# M9/M10 hardware checklist — headphone cue on the DDJ-FLX4
+# M9–M11 hardware checklist — headphone cue on the DDJ-FLX4
 
 Manual verification of the M9 and M10 exit criteria. Audio routing and
 hardware can't be e2e-heard (ADR-0005/0006): the graph math, mapping
@@ -51,5 +51,25 @@ table, and wiring are unit-tested; this covers real devices, real ears.
       + MIX knob, drop it with PLAY, swing the crossfader to B, stop A —
       mouse untouched, LEDs truthful throughout.
 
-When every box ticks, flip M9 and M10 in [`ROADMAP.md`](ROADMAP.md) to
-✅ done.
+## M11 — the FLX4's own phones jack (backend cue sink)
+
+Restart the backend first (`just run`) — the cue sink is new server
+code. System default output = FLX4 (master on the RCA), headphones in
+the **FLX4's jack**.
+
+- [ ] **Find devices** again: the list now ends with
+      "DDJ-FLX4 — phones jack". Pick it.
+- [ ] With deck A on air and channel B cued: deck B in the FLX4's
+      phones, the room (RCA) hears only deck A — one USB cable, no
+      second audio device.
+- [ ] Cue mix knob behaves exactly as on the browser-sink path.
+- [ ] The latency of the jack feed is a beat-ish behind the room —
+      expected (network + PortAudio hop, ADR-0007) and irrelevant for
+      auditioning texture.
+- [ ] Reload: the jack choice comes back and streams again after the
+      first gesture (play/connect).
+- [ ] Switch back to a Bluetooth/browser device: seamless, no backend
+      restart needed.
+
+When every box ticks, flip M9, M10, and M11 in [`ROADMAP.md`](ROADMAP.md)
+to ✅ done.

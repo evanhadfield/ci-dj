@@ -1,6 +1,6 @@
 # 0007. FLX4 phones jack via a backend cue sink
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-06-10
 - **Deciders:** Daniel Peter
 
