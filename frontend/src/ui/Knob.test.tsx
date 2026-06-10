@@ -70,4 +70,13 @@ describe('Knob', () => {
     fireEvent.doubleClick(getByLabelText('EQ Low'))
     expect(onChange).toHaveBeenCalledWith(0.5)
   })
+
+  it('parks at resetValue on double-click when one is given', () => {
+    const onChange = vi.fn()
+    const { getByLabelText } = render(
+      <Knob label="FX amount" value={0.9} resetValue={0} onChange={onChange} />,
+    )
+    fireEvent.doubleClick(getByLabelText('FX amount'))
+    expect(onChange).toHaveBeenCalledWith(0)
+  })
 })

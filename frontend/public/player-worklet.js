@@ -1,3 +1,5 @@
+import { createCrusherState, crushBlock } from './crusher-kernel.js';
+
 // PCM deck player. Ring-buffers interleaved stereo float32 chunks posted from
 // the main thread and plays them, counting underrun events. Playback starts
 // (and restarts after an underrun) only once PREBUFFER_SECONDS of audio is
@@ -150,8 +152,7 @@ class BitCrusher extends AudioWorkletProcessor {
     super();
     this.bits = 16;
     this.reduction = 1;
-    this.counter = 0;
-    this.held = [0, 0];
+    this.state = createCrusherState();
     this.port.onmessage = (event) => {
       this.bits = event.data.bits;
       this.reduction = event.data.reduction;
@@ -162,20 +163,7 @@ class BitCrusher extends AudioWorkletProcessor {
     const input = inputs[0];
     const output = outputs[0];
     if (!input || input.length === 0) return true;
-    const levels = Math.pow(2, this.bits - 1);
-    const frames = output[0].length;
-    for (let i = 0; i < frames; i++) {
-      if (this.counter === 0) {
-        for (let ch = 0; ch < output.length; ch++) {
-          const sample = (input[ch] ?? input[0])[i];
-          this.held[ch] = Math.round(sample * levels) / levels;
-        }
-      }
-      this.counter = (this.counter + 1) % this.reduction;
-      for (let ch = 0; ch < output.length; ch++) {
-        output[ch][i] = this.held[ch];
-      }
-    }
+    crushBlock(input, output, this.bits, this.reduction, this.state);
     return true;
   }
 }

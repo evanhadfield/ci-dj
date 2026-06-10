@@ -89,6 +89,17 @@ const SAMPLE_RATE = 48_000
 const PARAM_RAMP_SECONDS = 0.02
 const FLUSH_TIMEOUT_MS = 2_000
 
+/** setTargetAtTime converges but never lands; for params whose targets
+ * must hold exactly (the FX bypass pair, ADR-0008), a scheduled set
+ * finishes the ramp once it is inaudibly close (e⁻⁶ ≈ 0.25% off). */
+const SNAP_AFTER_SECONDS = PARAM_RAMP_SECONDS * 6
+
+function snapRamp(param: AudioParam, target: number, time: number) {
+  param.cancelAndHoldAtTime(time)
+  param.setTargetAtTime(target, time, PARAM_RAMP_SECONDS)
+  param.setValueAtTime(target, time + SNAP_AFTER_SECONDS)
+}
+
 /** Centre position; the single source for App state and the bus default. */
 export const INITIAL_CROSSFADE = 0.5
 
@@ -257,11 +268,14 @@ export function createAudioEngine(): AudioEngine {
       let fxGraph: FxGraph | null = null
       function applyFx() {
         const time = bus.context.currentTime
-        const active = fxKind !== null && isFxActive(fxKind, fxAmount)
-        const dryTarget =
-          !active || fxBlend(fxKind as FxKind) === 'add' ? 1 : 0
-        fxDry.gain.setTargetAtTime(dryTarget, time, PARAM_RAMP_SECONDS)
-        fxWet.gain.setTargetAtTime(active ? 1 : 0, time, PARAM_RAMP_SECONDS)
+        const kind = fxKind
+        if (kind === null || !isFxActive(kind, fxAmount)) {
+          snapRamp(fxDry.gain, 1, time)
+          snapRamp(fxWet.gain, 0, time)
+        } else {
+          snapRamp(fxDry.gain, fxBlend(kind) === 'add' ? 1 : 0, time)
+          snapRamp(fxWet.gain, 1, time)
+        }
         fxGraph?.apply(fxAmount, time)
       }
       function swapFx(kind: FxKind | null) {

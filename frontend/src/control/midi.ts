@@ -53,8 +53,16 @@ export function createMidiLink({
     requestAccess ??
     (typeof navigator !== 'undefined' &&
     typeof navigator.requestMIDIAccess === 'function'
-      ? // The position query is SysEx, so access must ask for it.
-        () => navigator.requestMIDIAccess({ sysex: true })
+      ? // The position query is SysEx, so ask for it — but a SysEx-only
+        // refusal (separate prompt, policy) must not kill the link:
+        // everything except the connect-time sync works without it.
+        async () => {
+          try {
+            return await navigator.requestMIDIAccess({ sysex: true })
+          } catch {
+            return navigator.requestMIDIAccess()
+          }
+        }
       : null)
 
   let access: MIDIAccess | null = null
@@ -77,8 +85,9 @@ export function createMidiLink({
     output = findFlx4(granted.outputs)
     // Every (re)bind syncs the app to the hardware: the controller
     // answers the query by reporting all current knob/fader positions,
-    // which flow through the translator like any other move.
-    if (input) output?.send(FLX4_STATUS_QUERY)
+    // which flow through the translator like any other move. Without
+    // the SysEx grant the sync is skipped, not the connection.
+    if (input && granted.sysexEnabled) output?.send(FLX4_STATUS_QUERY)
     onStatus(input ? 'connected' : 'no-device', input?.name ?? null)
   }
 

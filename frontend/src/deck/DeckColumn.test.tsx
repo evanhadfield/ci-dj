@@ -313,9 +313,13 @@ describe('DeckColumn', () => {
     )
 
     fireEvent.change(screen.getByLabelText('Effect'), {
-      target: { value: 'Dub Echo' },
+      target: { value: 'dub_echo' },
     })
     expect(onSetFx).toHaveBeenCalledWith('dub_echo')
+    // The option shows translated copy while the value stays the kind.
+    expect(screen.getByRole('option', { name: 'Dub Echo' })).toHaveValue(
+      'dub_echo',
+    )
 
     fireEvent.change(screen.getByLabelText('FX amount'), {
       target: { value: '0.8' },
@@ -331,11 +335,11 @@ describe('DeckColumn', () => {
       createControlBus(),
       { kind: null, amount: 0 },
     )
-    expect(screen.getByLabelText('Effect')).toHaveValue('Off')
+    expect(screen.getByLabelText('Effect')).toHaveValue('')
     expect(screen.getByLabelText('FX amount')).toBeDisabled()
 
     fireEvent.change(screen.getByLabelText('Effect'), {
-      target: { value: 'Off' },
+      target: { value: '' },
     })
     expect(onSetFx).toHaveBeenCalledWith(null)
   })

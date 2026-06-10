@@ -17,6 +17,7 @@ function fakeAccess(inputs: FakePort[], outputs: FakePort[] = []) {
     inputs: new Map(inputs.map((port, index) => [`in-${index}`, port])),
     outputs: new Map(outputs.map((port, index) => [`out-${index}`, port])),
     onstatechange: null as (() => void) | null,
+    sysexEnabled: true,
   }
 }
 
@@ -135,6 +136,45 @@ describe('createMidiLink', () => {
     flx4Out.send.mockClear()
     access.onstatechange?.()
     expect(flx4Out.send).toHaveBeenCalledWith(FLX4_STATUS_QUERY)
+  })
+
+  it('connects without the query when the grant has no SysEx', async () => {
+    const flx4Out = fakePort('DDJ-FLX4')
+    const access = fakeAccess([fakePort('DDJ-FLX4')], [flx4Out])
+    access.sysexEnabled = false
+    const { link, statuses } = createLink(access)
+    await link.connect()
+    expect(statuses.at(-1)).toEqual(['connected', 'DDJ-FLX4'])
+    expect(flx4Out.send).not.toHaveBeenCalled()
+  })
+
+  it('falls back to plain MIDI when the SysEx request is refused', async () => {
+    const access = fakeAccess([fakePort('DDJ-FLX4')])
+    access.sysexEnabled = false
+    const requestMIDIAccess = vi.fn((options?: { sysex?: boolean }) =>
+      options?.sysex
+        ? Promise.reject(new Error('SecurityError'))
+        : Promise.resolve(access as unknown as MIDIAccess),
+    )
+    Object.defineProperty(navigator, 'requestMIDIAccess', {
+      configurable: true,
+      value: requestMIDIAccess,
+    })
+    try {
+      const statuses: MidiStatus[] = []
+      const link = createMidiLink({
+        onMessage: vi.fn(),
+        onStatus: (status) => statuses.push(status),
+      })
+      await link.connect()
+      expect(statuses.at(-1)).toBe('connected')
+      expect(requestMIDIAccess).toHaveBeenCalledTimes(2)
+    } finally {
+      Object.defineProperty(navigator, 'requestMIDIAccess', {
+        configurable: true,
+        value: undefined,
+      })
+    }
   })
 
   it('skips the position query when only an input is present', async () => {

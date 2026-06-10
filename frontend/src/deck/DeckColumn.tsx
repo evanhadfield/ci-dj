@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { DeckId } from '../audio/engine'
-import { FX_KINDS, type FxKind } from '../audio/fx'
+import { FX_KINDS, fxRestPosition, type FxKind } from '../audio/fx'
 import { useControlBus } from '../control/busContext'
 import { Button } from '../ui/Button'
 import { Knob } from '../ui/Knob'
@@ -343,16 +343,16 @@ export function DeckColumn({
         <div className="deck__fx-select">
           <Select
             label={t('deck.fx.effect')}
-            value={fx.kind ? t(`deck.fx.names.${fx.kind}`) : t('deck.fx.off')}
+            value={fx.kind ?? ''}
             options={[
-              t('deck.fx.off'),
-              ...FX_KINDS.map((kind) => t(`deck.fx.names.${kind}`)),
+              { value: '', label: t('deck.fx.off') },
+              ...FX_KINDS.map((kind) => ({
+                value: kind,
+                label: t(`deck.fx.names.${kind}`),
+              })),
             ]}
-            onChange={(label) =>
-              onSetFx(
-                FX_KINDS.find((kind) => t(`deck.fx.names.${kind}`) === label) ??
-                  null,
-              )
+            onChange={(value) =>
+              onSetFx(FX_KINDS.find((kind) => kind === value) ?? null)
             }
           />
         </div>
@@ -361,6 +361,7 @@ export function DeckColumn({
           accent={deckId}
           value={fx.amount}
           disabled={!fx.kind}
+          resetValue={fx.kind ? fxRestPosition(fx.kind) : 0}
           onChange={onSetFxAmount}
         />
       </div>
