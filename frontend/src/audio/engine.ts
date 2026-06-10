@@ -142,6 +142,7 @@ export function createAudioEngine(): AudioEngine {
     async startRecording() {
       if (recorder) return
       const bus = await ensureBus()
+      if (recorder) return // a concurrent call won the await race
       const node = new AudioWorkletNode(bus.context, 'pcm-recorder', {
         numberOfInputs: 1,
         numberOfOutputs: 0,

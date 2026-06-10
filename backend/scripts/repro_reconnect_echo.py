@@ -4,6 +4,9 @@ must arrive. With a thread-blocked pump read, the old session's zombie
 get() can consume the new session's echo.
 
 Run while the server is up: uv run python scripts/repro_reconnect_echo.py
+Part of `just verify-ui` — the in-suite tests cannot deterministically
+exercise a thread-cancellation race, so this live check is the
+fails-without-the-fix regression test.
 """
 
 import asyncio

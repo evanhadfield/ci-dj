@@ -16,6 +16,10 @@ export type AppSettings = {
 
 const STORAGE_KEY = 'magenta-dj:v1'
 
+function clamp01(value: number) {
+  return Math.min(1, Math.max(0, value))
+}
+
 type Persisted = {
   decks?: Partial<Record<DeckId, Partial<DeckSettings>>>
   app?: Partial<AppSettings>
@@ -62,7 +66,9 @@ export function loadDeckSettings(deckId: DeckId): Partial<DeckSettings> {
     settings.targets = stored.targets
   }
   if (isPoint(stored.cursor)) settings.cursor = stored.cursor
-  if (Number.isFinite(stored.volume)) settings.volume = stored.volume
+  if (Number.isFinite(stored.volume)) {
+    settings.volume = clamp01(stored.volume as number)
+  }
   return settings
 }
 
@@ -81,7 +87,9 @@ export function updateDeckSettings(
 export function loadAppSettings(): Partial<AppSettings> {
   const stored = read().app
   if (!stored || typeof stored !== 'object') return {}
-  return Number.isFinite(stored.crossfade) ? { crossfade: stored.crossfade } : {}
+  return Number.isFinite(stored.crossfade)
+    ? { crossfade: clamp01(stored.crossfade as number) }
+    : {}
 }
 
 export function updateAppSettings(partial: Partial<AppSettings>) {

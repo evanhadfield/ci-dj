@@ -98,6 +98,7 @@ class PCMRecorder extends AudioWorkletProcessor {
   constructor() {
     super();
     this.recording = false;
+    this.stopped = false;
     this.batch = new Float32Array(RECORD_BATCH_FRAMES * 2);
     this.batchFrames = 0;
     this.port.onmessage = (event) => {
@@ -108,6 +109,7 @@ class PCMRecorder extends AudioWorkletProcessor {
         this.recording = false;
         this.flush();
         this.port.postMessage({ type: 'done' });
+        this.stopped = true; // lets process() return false → node reclaimable
       }
     };
   }
@@ -120,6 +122,7 @@ class PCMRecorder extends AudioWorkletProcessor {
   }
 
   process(inputs) {
+    if (this.stopped) return false;
     if (!this.recording) return true;
     const input = inputs[0];
     if (!input || input.length === 0) return true;

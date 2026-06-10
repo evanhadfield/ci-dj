@@ -127,6 +127,10 @@ function applyServerEvent(state: DeckState, event: ServerEvent): DeckState {
         model: event.model,
         availableModels: event.models,
         switchingModel: event.restarting,
+        // A new session can be talking to a brand-new worker (backend
+        // restart); dropping the stale style lets the re-apply effect
+        // restore the arrangement either way.
+        activeStyle: null,
         ramInfo: {
           totalGb: event.total_ram_gb,
           estimateGbByModel: event.model_ram_estimate_gb,

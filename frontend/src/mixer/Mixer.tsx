@@ -18,7 +18,7 @@ function downloadWav(blob: Blob) {
   anchor.href = url
   anchor.download = `magenta-dj-${stamp}.wav`
   anchor.click()
-  URL.revokeObjectURL(url)
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
 function formatElapsed(totalSeconds: number) {
@@ -34,6 +34,7 @@ export function Mixer({ crossfade, onCrossfadeChange }: MixerProps) {
   const { t } = useTranslation()
   const engine = useAudioEngine()
   const [recording, setRecording] = useState(false)
+  const [busy, setBusy] = useState(false)
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
@@ -52,6 +53,7 @@ export function Mixer({ crossfade, onCrossfadeChange }: MixerProps) {
   }
 
   async function toggleRecording() {
+    setBusy(true)
     try {
       if (!recording) {
         await engine.resume()
@@ -66,6 +68,8 @@ export function Mixer({ crossfade, onCrossfadeChange }: MixerProps) {
     } catch (cause) {
       setRecording(false)
       setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -85,7 +89,7 @@ export function Mixer({ crossfade, onCrossfadeChange }: MixerProps) {
       </div>
       <span className="mixer__edge">{t('mixer.deckB')}</span>
       <div className="mixer__record">
-        <Button onClick={() => void toggleRecording()}>
+        <Button onClick={() => void toggleRecording()} disabled={busy}>
           {recording ? t('mixer.stopRecording') : t('mixer.record')}
         </Button>
         {recording && (

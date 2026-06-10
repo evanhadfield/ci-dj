@@ -7,6 +7,7 @@ import type { RamInfo } from './deck/deckState'
 import { Mixer } from './mixer/Mixer'
 import { combinedRamWarning } from './ramWarning'
 import { loadAppSettings, updateAppSettings } from './persistence'
+import { handleShortcutKey } from './shortcuts'
 import { useAudioEngine } from './audio/engineContext'
 
 function App() {
@@ -16,30 +17,17 @@ function App() {
     () => loadAppSettings().crossfade ?? INITIAL_CROSSFADE,
   )
 
-  // Apply the restored crossfade before the bus is built (the engine stores
-  // it until first play), and register the focus shortcuts.
+  // Hand the restored crossfade to the engine once — it holds the position
+  // until the bus is built on first play. Later moves go through
+  // handleCrossfade, so this deliberately ignores `crossfade` updates.
   useEffect(() => {
     engine.setCrossfade(crossfade)
-    // Restore-once: later moves go through handleCrossfade.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine])
 
   useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.metaKey || event.ctrlKey || event.altKey) return
-      const origin = event.target as HTMLElement
-      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(origin.tagName)) return
-      const selector = {
-        a: '[data-shortcut="deck-a-prompt"]',
-        b: '[data-shortcut="deck-b-prompt"]',
-        x: '[data-shortcut="crossfade"]',
-      }[event.key]
-      if (!selector) return
-      event.preventDefault()
-      document.querySelector<HTMLElement>(selector)?.focus()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', handleShortcutKey)
+    return () => window.removeEventListener('keydown', handleShortcutKey)
   }, [])
 
   const handleCrossfade = useCallback((position: number) => {
