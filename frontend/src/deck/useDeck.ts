@@ -180,12 +180,10 @@ export function useDeck(deckId: DeckId): DeckControls {
 
   const setEqBand = useCallback(
     (band: EqBand, value: number) => {
-      setEqState((previous) => {
-        const next = { ...previous, [band]: value }
-        eqRef.current = next
-        updateDeckSettings(deckId, { eq: next })
-        return next
-      })
+      const next = { ...eqRef.current, [band]: value }
+      eqRef.current = next
+      setEqState(next)
+      updateDeckSettings(deckId, { eq: next })
       channelRef.current?.setEq(band, value)
     },
     [deckId],

@@ -135,7 +135,9 @@ close/reopen the app and pick up previous settings.
 (`frontend/scripts/verify_m6.mjs`): killing deck A's low band measured
 **−39.6 dB** in the recorded master (Goertzel filter bank over the WAV)
 with the high band untouched, deck B streaming cleanly with isolated
-controls throughout, and the kill restored after reload.
+controls throughout, and the kill restored after reload. Known limit: the
+mid band is a 1 kHz bell, so its bottom is a deep notch, not a full-band
+kill (the shelf+peak trade-off of compact mixer EQs).
 
 **Goal:** cut and boost frequency bands per deck like a DJ mixer — kill the
 lows on the incoming deck, swap basslines across the crossfade.

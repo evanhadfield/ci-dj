@@ -2,7 +2,7 @@
  * session left off. Tolerant on read: anything malformed loads as absent. */
 
 import type { DeckId } from './audio/engine'
-import type { EqBand } from './audio/eq'
+import { EQ_BANDS, type EqBand } from './audio/eq'
 import type { PadPoint } from './deck/padWeights'
 
 export type DeckSettings = {
@@ -81,13 +81,11 @@ export function loadDeckSettings(deckId: DeckId): Partial<DeckSettings> {
   if (
     eq &&
     typeof eq === 'object' &&
-    (['low', 'mid', 'high'] as const).every((band) => Number.isFinite(eq[band]))
+    EQ_BANDS.every((band) => Number.isFinite(eq[band]))
   ) {
-    settings.eq = {
-      low: clamp01(eq.low),
-      mid: clamp01(eq.mid),
-      high: clamp01(eq.high),
-    }
+    settings.eq = Object.fromEntries(
+      EQ_BANDS.map((band) => [band, clamp01(eq[band] as number)]),
+    ) as Record<EqBand, number>
   }
   return settings
 }

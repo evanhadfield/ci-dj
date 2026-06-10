@@ -1,8 +1,10 @@
 /** The deck EQ's knob-value → gain curve and band layout (roadmap M6).
  *
  * Classic DJ-mixer behaviour: centre is flat, the top half boosts modestly,
- * the bottom half cuts all the way to a kill — so pulling a band down
- * removes it rather than just quieting it. */
+ * the bottom half cuts down to -40dB. The low/high shelves attenuate their
+ * whole band at that gain (a true kill); the mid is a bell at 1 kHz, so its
+ * bottom is a deep notch rather than a full-band kill — the same trade-off
+ * as a shelf+peak mixer EQ. */
 
 export type EqBand = 'low' | 'mid' | 'high'
 

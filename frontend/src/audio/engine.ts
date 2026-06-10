@@ -111,18 +111,21 @@ export function createAudioEngine(): AudioEngine {
         outputChannelCount: [2],
       })
       // worklet → low → mid → high → volume → crossfade (roadmap M6).
-      const eqNodes = {} as Record<EqBand, BiquadFilterNode>
+      const eqNodes = Object.fromEntries(
+        EQ_BANDS.map((band) => {
+          const layout = EQ_FILTERS[band]
+          const filter = bus.context.createBiquadFilter()
+          filter.type = layout.type
+          filter.frequency.value = layout.frequency
+          if (layout.q !== undefined) filter.Q.value = layout.q
+          filter.gain.value = eqValueToDb(initial.eq[band])
+          return [band, filter]
+        }),
+      ) as Record<EqBand, BiquadFilterNode>
       let head: AudioNode = worklet
       for (const band of EQ_BANDS) {
-        const layout = EQ_FILTERS[band]
-        const filter = bus.context.createBiquadFilter()
-        filter.type = layout.type
-        filter.frequency.value = layout.frequency
-        if (layout.q !== undefined) filter.Q.value = layout.q
-        filter.gain.value = eqValueToDb(initial.eq[band])
-        head.connect(filter)
-        head = filter
-        eqNodes[band] = filter
+        head.connect(eqNodes[band])
+        head = eqNodes[band]
       }
       const volume = bus.context.createGain()
       volume.gain.value = initial.volume
