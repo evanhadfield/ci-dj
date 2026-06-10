@@ -16,6 +16,7 @@ function stubMidiAccess(outputSend: ReturnType<typeof vi.fn>) {
     inputs: new Map([['in-0', input]]),
     outputs: new Map([['out-0', { name: 'DDJ-FLX4', send: outputSend }]]),
     onstatechange: null,
+    sysexEnabled: true,
   }
   Object.defineProperty(navigator, 'requestMIDIAccess', {
     configurable: true,

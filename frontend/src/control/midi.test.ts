@@ -156,6 +156,10 @@ describe('createMidiLink', () => {
         ? Promise.reject(new Error('SecurityError'))
         : Promise.resolve(access as unknown as MIDIAccess),
     )
+    const original = Object.getOwnPropertyDescriptor(
+      navigator,
+      'requestMIDIAccess',
+    )
     Object.defineProperty(navigator, 'requestMIDIAccess', {
       configurable: true,
       value: requestMIDIAccess,
@@ -170,10 +174,11 @@ describe('createMidiLink', () => {
       expect(statuses.at(-1)).toBe('connected')
       expect(requestMIDIAccess).toHaveBeenCalledTimes(2)
     } finally {
-      Object.defineProperty(navigator, 'requestMIDIAccess', {
-        configurable: true,
-        value: undefined,
-      })
+      if (original) {
+        Object.defineProperty(navigator, 'requestMIDIAccess', original)
+      } else {
+        delete (navigator as { requestMIDIAccess?: unknown }).requestMIDIAccess
+      }
     }
   })
 
