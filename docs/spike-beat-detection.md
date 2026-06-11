@@ -14,16 +14,16 @@ stable estimate") is comfortably cleared.
 
 | Style | librosa ref | shown | confidence | displayed | first shown |
 | ----- | ----------- | ----- | ---------- | --------- | ----------- |
-| techno | 130.8 | **131.9** | 0.29–0.73 | 10/24 s | 15 s |
-| house | 119.7 | **120.0** | 0.23–0.58 | 10/24 s | 15 s |
+| techno | 130.8 | **131.7** | 0.29–0.73 | 10/24 s | 15 s |
+| house | 119.7 | **119.9** | 0.23–0.58 | 10/24 s | 15 s |
 | dnb | 89.3 | **119.5** | 0.25–0.63 | 10/24 s | 15 s |
-| hiphop | 95.3 | **189.5** | 0.35–0.60 | 12/24 s | 13 s |
-| garage | 133.9 | **135.4** | 0.26–0.49 | 5/24 s | 20 s |
-| dub | 140.6 | **139.9** | 0.14–0.57 | 9/24 s | 16 s |
+| hiphop | 95.3 | **188.5** | 0.35–0.60 | 12/24 s | 13 s |
+| garage | 133.9 | **135.2** | 0.26–0.49 | 5/24 s | 20 s |
+| dub | 140.6 | **138.9** | 0.14–0.57 | 9/24 s | 16 s |
 | triphop | 45.0 | — | 0.09–0.33 | 0/24 s | — |
 | ambient (beatless) | (160.7) | — | 0.32–0.48 | 0/24 s | — |
-| soundscape (beatless) | (119.7) | — | 0.12–0.23 | 0/24 s | — |
-| piano (beatless) | (74.0) | — | 0.01–0.21 | 0/24 s | — |
+| soundscape (beatless) | (119.7) | — | 0.14–0.24 | 0/24 s | — |
+| piano (beatless) | (74.0) | — | 0.03–0.19 | 0/24 s | — |
 
 Reading the disagreements honestly:
 
@@ -68,6 +68,10 @@ Reading the disagreements honestly:
    unconfident second holds the readout (re-acquiring costs 3+ s), a
    second consecutive miss — or three confident-but-disagreeing
    estimates — drops it. Acquisition stays strict.
+7. **Hysteresis on the locked value.** Successive analysis windows
+   jitter by fractions of a bpm; a locked readout (and the synced
+   echo's delay) holds still until the median moves beyond the gate
+   tolerance — the table's "shown" column is the first locked value.
 
 ## The shipped gate
 

@@ -24,7 +24,15 @@ export const MIN_LOOP_SECONDS = 0.5
  * beats). Without one, the raw length is the honest behaviour. */
 export function quantiseLoopSeconds(seconds: number, bpm: number): number {
   const beat = 60 / bpm
-  return Math.max(1, Math.round(seconds / beat)) * beat
+  // The floor keeps a quantised press above the capture refusal
+  // threshold regardless of the caller's length menu (one beat at
+  // 200 bpm is 0.3 s — under MIN_LOOP_SECONDS).
+  const beats = Math.max(
+    Math.ceil(MIN_LOOP_SECONDS / beat),
+    Math.round(seconds / beat),
+    1,
+  )
+  return beats * beat
 }
 
 /** Build a seamless loop from a captured channel: the first

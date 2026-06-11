@@ -66,4 +66,10 @@ describe('quantiseLoopSeconds', () => {
   it('never quantises below one beat', () => {
     expect(quantiseLoopSeconds(0.2, 60)).toBe(1)
   })
+
+  it('never quantises below the capture refusal floor', () => {
+    // One beat at 200 bpm is 0.3 s — under MIN_LOOP_SECONDS; the
+    // quantiser must add beats rather than produce a refused press.
+    expect(quantiseLoopSeconds(0.2, 200)).toBeGreaterThanOrEqual(0.5)
+  })
 })

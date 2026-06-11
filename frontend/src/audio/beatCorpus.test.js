@@ -89,11 +89,10 @@ describe('beat estimator on the spike corpus', () => {
         ` | first at ${firstShownAt ?? '—'}s\n`,
     )
 
-    const expectation = entry.expect ?? (entry.rhythmic ? 'rhythmic' : 'beatless')
-    if (expectation === 'rhythmic') {
+    if (entry.expect === 'rhythmic') {
       expect(final).not.toBeNull()
       expect(metricallyMatches(final, entry.librosa_bpm)).toBe(true)
-    } else if (expectation === 'beatless') {
+    } else if (entry.expect === 'beatless') {
       expect(final).toBeNull()
     } else {
       // Ambiguous material (librosa itself has no candidate above

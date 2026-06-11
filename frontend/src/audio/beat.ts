@@ -259,7 +259,15 @@ export function createBeatGate(): BeatGate {
       const median = sorted[Math.floor(sorted.length / 2)]
       const stable = sorted[sorted.length - 1] - sorted[0] <= median * GATE_TOLERANCE
       if (stable) {
-        displayed = median
+        // Hysteresis: successive windows jitter by fractions of a bpm;
+        // a locked readout holds still (and the synced echo's delay
+        // stays put) until the median genuinely moves.
+        if (
+          displayed === null ||
+          Math.abs(median - displayed) > displayed * GATE_TOLERANCE
+        ) {
+          displayed = median
+        }
         unstable = 0
       } else {
         // Confident but disagreeing: hold briefly (a tempo change is

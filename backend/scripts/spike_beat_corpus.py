@@ -3,7 +3,7 @@
 Generates a style matrix from clearly rhythmic to deliberately
 beatless, writes each as a WAV plus a manifest with a librosa
 reference tempo. The frontend's SHIPPING estimator is then run over
-exactly these files by `frontend/src/audio/beatCorpus.test.ts` — the
+exactly these files by `frontend/src/audio/beatCorpus.test.js` — the
 measurement that sets (or kills) the M14 confidence gate, recorded in
 docs/spike-beat-detection.md.
 

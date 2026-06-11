@@ -144,6 +144,25 @@ describe('createBeatGate', () => {
     expect(gate.push(confident(170))).toBeNull()
   })
 
+  it('holds a locked readout still while estimates jitter within tolerance', () => {
+    const gate = createBeatGate()
+    gate.push(confident(128))
+    gate.push(confident(128))
+    gate.push(confident(128))
+    expect(gate.current()).toBe(128)
+    // Successive windows never agree to the last float; the display
+    // (and the synced echo's clock) must not chase the jitter.
+    gate.push(confident(128.4))
+    gate.push(confident(127.6))
+    gate.push(confident(128.3))
+    expect(gate.current()).toBe(128)
+    // A genuine move beyond tolerance still follows.
+    gate.push(confident(140))
+    gate.push(confident(140.2))
+    gate.push(confident(139.8))
+    expect(gate.current()).toBeCloseTo(140, 0)
+  })
+
   it('folds octave-flapping estimates onto the held tempo', () => {
     // Half/double of the same beat structure is the same answer at
     // another metrical level (the corpus hip hop clip alternates
