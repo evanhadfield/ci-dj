@@ -40,7 +40,7 @@ sends it on every device bind so a fresh connection starts in sync.
 | ------- | ------- | --- |
 | Tempo sliders | `0xB0`/`0xB1` CC `0x00` range | no tempo parameter (ADR-0004) |
 | Jog wheels | `0xB0`/`0xB1` CC `0x21`/`0x22` etc. | no scratch concept in v1; cursor-nudge candidate later |
-| TRIM, CUE (headphone), browse/load, BEAT SYNC, loop section | various | no app counterpart yet |
+| TRIM, BEAT SYNC, loop section | various | no app counterpart yet (CUE went in M10, browse/load in M16) |
 
 ## Mapped in M10 (headphone cue)
 
