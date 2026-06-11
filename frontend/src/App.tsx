@@ -252,6 +252,10 @@ function App() {
           fx={deckA.fx}
           onSetFx={deckA.setFx}
           onSetFxAmount={deckA.setFxAmount}
+          loop={deckA.loop}
+          onLoopPad={deckA.toggleLoopPad}
+          onClearLoopPad={deckA.clearLoopPad}
+          onSetLoopSeconds={deckA.setLoopSeconds}
         />
         <MixerStrip
           channels={channels}
@@ -276,6 +280,10 @@ function App() {
           fx={deckB.fx}
           onSetFx={deckB.setFx}
           onSetFxAmount={deckB.setFxAmount}
+          loop={deckB.loop}
+          onLoopPad={deckB.toggleLoopPad}
+          onClearLoopPad={deckB.clearLoopPad}
+          onSetLoopSeconds={deckB.setLoopSeconds}
         />
       </div>
     </main>
