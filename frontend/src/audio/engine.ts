@@ -31,6 +31,7 @@ import {
   clipGuardCurve,
   dbToGain,
   LIMITER_ATTACK_SECONDS,
+  LIMITER_KNEE_DB,
   LIMITER_MAKEUP_DB,
   LIMITER_RATIO,
   LIMITER_RELEASE_SECONDS,
@@ -207,7 +208,7 @@ export function createAudioEngine(): AudioEngine {
       // blend — hears the limited signal: the WAV is what was heard.
       const limiter = context.createDynamicsCompressor()
       limiter.threshold.value = LIMITER_THRESHOLD_DB
-      limiter.knee.value = 0
+      limiter.knee.value = LIMITER_KNEE_DB
       limiter.ratio.value = LIMITER_RATIO
       limiter.attack.value = LIMITER_ATTACK_SECONDS
       limiter.release.value = LIMITER_RELEASE_SECONDS

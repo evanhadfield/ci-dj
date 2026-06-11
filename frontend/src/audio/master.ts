@@ -20,6 +20,7 @@ export const LIMITER_CEILING = 0.9296875
  * attack; the threshold sits under the ceiling so the guard only
  * catches what the attack lets through. */
 export const LIMITER_THRESHOLD_DB = -6
+export const LIMITER_KNEE_DB = 0
 export const LIMITER_RATIO = 20
 export const LIMITER_ATTACK_SECONDS = 0.002
 export const LIMITER_RELEASE_SECONDS = 0.25
@@ -29,7 +30,9 @@ export const LIMITER_RELEASE_SECONDS = 0.25
  * ~+3.4 dB on EVERYTHING, including signal that never crosses the
  * threshold. The engine compensates with the inverse so inserting the
  * limiter is level-transparent until it actually works, and the
- * gain-reduction readout stays an honest account of net level change. */
+ * gain-reduction readout stays an honest account of net level change.
+ * The full-scale-gain formula below is the HARD-KNEE case — it holds
+ * only while LIMITER_KNEE_DB is 0. */
 const FULL_SCALE_GAIN_DB = LIMITER_THRESHOLD_DB - LIMITER_THRESHOLD_DB / LIMITER_RATIO
 export const LIMITER_MAKEUP_DB = -0.6 * FULL_SCALE_GAIN_DB
 
