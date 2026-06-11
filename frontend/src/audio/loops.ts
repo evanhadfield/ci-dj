@@ -18,6 +18,15 @@ export const LOOP_CROSSFADE_SECONDS = 0.03
  * "loop" is a stutter, not a freeze. */
 export const MIN_LOOP_SECONDS = 0.5
 
+/** With a confident tempo (M14) a capture snaps to whole beats, so
+ * the loop wraps on the grid instead of mid-stride; level-tolerant by
+ * construction (whole beats of a half-time reading are still whole
+ * beats). Without one, the raw length is the honest behaviour. */
+export function quantiseLoopSeconds(seconds: number, bpm: number): number {
+  const beat = 60 / bpm
+  return Math.max(1, Math.round(seconds / beat)) * beat
+}
+
 /** Build a seamless loop from a captured channel: the first
  * `crossfadeFrames` of the output blend the capture's surplus tail into
  * its head, so the wrap point is continuous by construction. The fade

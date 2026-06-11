@@ -3,7 +3,11 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { createBeatGate, createBeatTracker } from '../audio/beat'
 import { EQ_FLAT, type EqBand } from '../audio/eq'
 import { fxRestPosition, type FxKind } from '../audio/fx'
-import { DEFAULT_LOOP_SECONDS, LOOP_SLOT_COUNT } from '../audio/loops'
+import {
+  DEFAULT_LOOP_SECONDS,
+  LOOP_SLOT_COUNT,
+  quantiseLoopSeconds,
+} from '../audio/loops'
 import { useAudioEngine } from '../audio/engineContext'
 import { loadDeckSettings, updateDeckSettings } from '../persistence'
 import { SAMPLE_RATE, type DeckChannel, type DeckId } from '../audio/engine'
@@ -108,6 +112,7 @@ export function useDeck(deckId: DeckId): DeckControls {
   const resetBeat = useCallback(() => {
     beat.tracker.reset()
     beat.gate.reset()
+    channelRef.current?.setBeatPeriod(null)
     setBpm(null)
   }, [beat])
   const [primed, setPrimedState] = useState(false)
@@ -207,10 +212,15 @@ export function useDeck(deckId: DeckId): DeckControls {
   }, [deckId, beat, resetBeat])
 
   // One estimate per second through the honesty gate (M14); the state
-  // setter is a no-op re-render-wise while the gated value holds.
+  // setter is a no-op re-render-wise while the gated value holds. The
+  // channel follows so the synced dub echo has its clock.
   useEffect(() => {
     const timer = setInterval(() => {
-      setBpm(beat.gate.push(beat.tracker.estimate()))
+      const displayed = beat.gate.push(beat.tracker.estimate())
+      setBpm(displayed)
+      channelRef.current?.setBeatPeriod(
+        displayed === null ? null : 60 / displayed,
+      )
     }, 1_000)
     return () => clearInterval(timer)
   }, [beat])
@@ -375,8 +385,14 @@ export function useDeck(deckId: DeckId): DeckControls {
       }
       // One gesture: capture the just-played tail AND freeze onto it.
       // The press is refused (no state change) when too little has
-      // played to loop (ADR-0009).
-      void channel.captureLoop(slot, current.seconds).then((captured) => {
+      // played to loop (ADR-0009). A gated tempo snaps the length to
+      // whole beats (M14).
+      const gatedBpm = beat.gate.current()
+      const seconds =
+        gatedBpm === null
+          ? current.seconds
+          : quantiseLoopSeconds(current.seconds, gatedBpm)
+      void channel.captureLoop(slot, seconds).then((captured) => {
         if (!captured || channelRef.current !== channel) return
         if (loopGestureRef.current !== gesture) {
           // Overtaken by STOP or a newer press: drop the buffer too, so
@@ -395,7 +411,7 @@ export function useDeck(deckId: DeckId): DeckControls {
         })
       })
     },
-    [setLoop],
+    [setLoop, beat],
   )
 
   const clearLoopPad = useCallback(

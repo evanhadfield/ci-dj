@@ -65,6 +65,7 @@ function makeFakeEngine(overrides: Partial<AudioEngine> = {}) {
     setCue: vi.fn(),
     setFx: vi.fn(),
     setFxAmount: vi.fn(),
+    setBeatPeriod: vi.fn(),
     setOnAir: vi.fn(),
     captureLoop: vi.fn(async () => true),
     playLoop: vi.fn(() => true),
@@ -372,6 +373,38 @@ describe('useDeck beat readout', () => {
     })
     act(() => void vi.advanceTimersByTime(5_000))
     expect(result.current.bpm).toBeNull()
+  })
+
+  it('hands the beat period to the channel and clears it with the gate', async () => {
+    const { engine, channel } = makeFakeEngine()
+    const { result } = renderDeck(engine)
+    act(() => socket(0).serverOpen())
+    await act(() => result.current.play())
+
+    streamClicks(128, 16)
+    act(() => void vi.advanceTimersByTime(3_000))
+    const bpm = result.current.bpm!
+    expect(channel.setBeatPeriod).toHaveBeenLastCalledWith(60 / bpm)
+
+    act(() => result.current.stop())
+    expect(channel.setBeatPeriod).toHaveBeenLastCalledWith(null)
+  })
+
+  it('quantises a capture to whole beats when the gate is confident', async () => {
+    const { engine, channel } = makeFakeEngine()
+    const { result } = renderDeck(engine)
+    act(() => socket(0).serverOpen())
+    await act(() => result.current.play())
+
+    streamClicks(128, 16)
+    act(() => void vi.advanceTimersByTime(3_000))
+    const bpm = result.current.bpm!
+
+    await act(async () => result.current.toggleLoopPad(0))
+    const seconds = vi.mocked(channel.captureLoop).mock.calls.at(-1)![1]
+    const beats = (seconds * bpm) / 60
+    expect(Math.abs(beats - Math.round(beats))).toBeLessThan(1e-6)
+    expect(seconds).not.toBe(4) // 4 s is off-grid at ~128 bpm
   })
 
   it('forgets the stream across a model switch', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildLoopChannel } from './loops'
+import { buildLoopChannel, quantiseLoopSeconds } from './loops'
 
 function ramp(length: number): Float32Array {
   return Float32Array.from({ length }, (_, i) => i / length)
@@ -50,5 +50,20 @@ describe('buildLoopChannel', () => {
   it('is the identity at zero fade', () => {
     const samples = ramp(50)
     expect(Array.from(buildLoopChannel(samples, 0))).toEqual(Array.from(samples))
+  })
+})
+
+describe('quantiseLoopSeconds', () => {
+  it('snaps the requested length to the nearest whole beat count', () => {
+    // 128 bpm: beat 0.46875 s; 4 s ≈ 8.53 beats → 9 beats.
+    expect(quantiseLoopSeconds(4, 128)).toBeCloseTo(9 * (60 / 128), 6)
+  })
+
+  it('is exact when the length already sits on the grid', () => {
+    expect(quantiseLoopSeconds(2, 120)).toBeCloseTo(2, 6)
+  })
+
+  it('never quantises below one beat', () => {
+    expect(quantiseLoopSeconds(0.2, 60)).toBe(1)
   })
 })
