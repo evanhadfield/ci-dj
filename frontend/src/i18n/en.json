@@ -55,6 +55,10 @@
       "addTarget": "Add",
       "removeTarget": "Remove {{prompt}}",
       "pad": "Style pad",
+      "sampleOther": "Sample deck {{deck}}",
+      "sampleLabel": "⏺ {{deck}}·{{n}}",
+      "sampleFailed": "Sampling failed: {{message}}",
+      "sampleTooSoon": "the other deck hasn't played enough yet",
       "active": "Playing: {{summary}}",
       "blendItem": "{{percent}}% {{text}}",
       "blendSeparator": " · "

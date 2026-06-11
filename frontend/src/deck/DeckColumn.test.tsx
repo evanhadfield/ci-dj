@@ -1,10 +1,11 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { FxKind } from '../audio/fx'
 import { createControlBus, type ControlBus } from '../control/bus'
 import { ControlBusProvider } from '../control/ControlBusProvider'
-import { updateDeckSettings } from '../persistence'
+import { loadDeckSettings, updateDeckSettings } from '../persistence'
 import { DeckColumn } from './DeckColumn'
 import { initialDeckState, type DeckState } from './deckState'
 import type { LoopState } from './useDeck'
@@ -22,6 +23,7 @@ function renderPanel(
     seconds: 4,
   },
   bpm: number | null = null,
+  canSample = true,
 ) {
   return render(
     <ControlBusProvider bus={bus}>
@@ -47,6 +49,13 @@ function renderPanel(
           (handlers.onSetLoopSeconds as (seconds: number) => void) ?? noop
         }
         bpm={bpm}
+        onSampleOtherDeck={
+          (handlers.onSampleOtherDeck as () => Promise<{
+            label: string
+            sample: string
+          } | null>) ?? (async () => null)
+        }
+        canSample={canSample}
       />
     </ControlBusProvider>,
   )
@@ -440,6 +449,167 @@ describe('DeckColumn', () => {
     act(() => bus.publish({ kind: 'style_target', deck: 'a', index: 0 }))
 
     expect(onSetStyle).not.toHaveBeenCalled()
+  })
+
+  it('samples the other deck onto the pad and sends the blend', async () => {
+    const onSampleOtherDeck = vi.fn(async () => ({
+      label: '⏺ B·1',
+      sample: 'sample:b:1',
+    }))
+    const onSetStyle = vi.fn()
+    renderPanel(
+      { connection: 'open' },
+      {
+        onSampleOtherDeck: onSampleOtherDeck as unknown as () => void,
+        onSetStyle: onSetStyle as () => void,
+      },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Sample deck B' }))
+    expect(await screen.findByText('⏺ B·1 ✕')).toBeInTheDocument()
+    expect(onSetStyle).toHaveBeenCalledWith({
+      prompts: [{ text: '⏺ B·1', weight: 1, sample: 'sample:b:1' }],
+    })
+  })
+
+  it('sends the sampled blend exactly once under StrictMode', async () => {
+    // Guards the updater-purity fix: a sendStyle smuggled into a
+    // setTargets updater double-fires when StrictMode replays it.
+    const onSampleOtherDeck = vi.fn(async () => ({
+      label: '⏺ B·1',
+      sample: 'sample:b:1',
+    }))
+    const onSetStyle = vi.fn()
+    render(
+      <StrictMode>
+        <ControlBusProvider bus={createControlBus()}>
+          <DeckColumn
+            deckId="a"
+            // activeStyle set: keeps the reload-resend effect quiet so
+            // the only sender under test is the sampling handler.
+            state={{
+              ...initialDeckState,
+              connection: 'open',
+              activeStyle: { prompts: [{ text: 'x', weight: 1 }] },
+            }}
+            getWaveformRange={() => [0, 0]}
+            onPlay={noop}
+            onStop={noop}
+            onSetStyle={onSetStyle as (s: object) => void}
+            onSetModel={noop as (m: string) => void}
+            onRestart={noop}
+            fx={{ kind: null, amount: 0 }}
+            onSetFx={noop as (k: unknown) => void}
+            onSetFxAmount={noop as (v: number) => void}
+            loop={{ filled: [false, false, false, false], active: null, seconds: 4 }}
+            onLoopPad={noop as (slot: number) => void}
+            onClearLoopPad={noop as (slot: number) => void}
+            onSetLoopSeconds={noop as (seconds: number) => void}
+            bpm={null}
+            onSampleOtherDeck={onSampleOtherDeck}
+            canSample
+          />
+        </ControlBusProvider>
+      </StrictMode>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Sample deck B' }))
+    await screen.findByText('⏺ B·1 ✕')
+    expect(onSetStyle).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports an honest reason when the other deck has not played enough', async () => {
+    const onSampleOtherDeck = vi.fn(async () => null)
+    renderPanel(
+      { connection: 'open' },
+      { onSampleOtherDeck: onSampleOtherDeck as unknown as () => void },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Sample deck B' }))
+    expect(
+      await screen.findByText(
+        "Sampling failed: the other deck hasn't played enough yet",
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('disables sampling while the other deck is silent', () => {
+    renderPanel(
+      { connection: 'open' },
+      {},
+      createControlBus(),
+      { kind: null, amount: 0 },
+      { filled: [false, false, false, false], active: null, seconds: 4 },
+      null,
+      false,
+    )
+    expect(screen.getByRole('button', { name: 'Sample deck B' })).toBeDisabled()
+  })
+
+  it('shows the reason when sampling fails', async () => {
+    const onSampleOtherDeck = vi.fn(async () => {
+      throw new Error('deck is loading a model')
+    })
+    renderPanel(
+      { connection: 'open' },
+      { onSampleOtherDeck: onSampleOtherDeck as unknown as () => void },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Sample deck B' }))
+    expect(
+      await screen.findByText('Sampling failed: deck is loading a model'),
+    ).toBeInTheDocument()
+  })
+
+  it('keeps sampled targets out of persistence', async () => {
+    const onSampleOtherDeck = vi.fn(async () => ({
+      label: '⏺ B·1',
+      sample: 'sample:b:1',
+    }))
+    renderPanel(
+      { connection: 'open' },
+      { onSampleOtherDeck: onSampleOtherDeck as unknown as () => void },
+    )
+    addTarget('funk')
+    fireEvent.click(screen.getByRole('button', { name: 'Sample deck B' }))
+    await screen.findByText('⏺ B·1 ✕')
+    const persisted = loadDeckSettings('a').targets ?? []
+    expect(persisted.map((target) => target.text)).toEqual(['funk'])
+  })
+
+  it('drops sampled targets when the worker dies', async () => {
+    const onSampleOtherDeck = vi.fn(async () => ({
+      label: '⏺ B·1',
+      sample: 'sample:b:1',
+    }))
+    const { rerender } = renderPanel(
+      { connection: 'open' },
+      { onSampleOtherDeck: onSampleOtherDeck as unknown as () => void },
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Sample deck B' }))
+    await screen.findByText('⏺ B·1 ✕')
+
+    rerender(
+      <ControlBusProvider bus={createControlBus()}>
+        <DeckColumn
+          deckId="a"
+          state={{ ...initialDeckState, connection: 'open', workerDied: true }}
+          getWaveformRange={() => [0, 0]}
+          onPlay={noop}
+          onStop={noop}
+          onSetStyle={noop as (s: object) => void}
+          onSetModel={noop as (m: string) => void}
+          onRestart={noop}
+          fx={{ kind: null, amount: 0 }}
+          onSetFx={noop as (k: unknown) => void}
+          onSetFxAmount={noop as (v: number) => void}
+          loop={{ filled: [false, false, false, false], active: null, seconds: 4 }}
+          onLoopPad={noop as (slot: number) => void}
+          onClearLoopPad={noop as (slot: number) => void}
+          onSetLoopSeconds={noop as (seconds: number) => void}
+          bpm={null}
+          onSampleOtherDeck={async () => null}
+          canSample
+        />
+      </ControlBusProvider>,
+    )
+    expect(screen.queryByText('⏺ B·1 ✕')).not.toBeInTheDocument()
   })
 
   it('fires a loop pad on click and a clear on shift-click', () => {
