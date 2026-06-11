@@ -105,6 +105,29 @@ describe('createFlx4Translator', () => {
       },
     )
 
+    it.each([
+      [0x98, 'a'],
+      [0x9a, 'b'],
+    ] as const)(
+      'shift-layer (%s) SAMPLER pads clear deck %s slots',
+      (status, deck) => {
+        // The firmware moves held-SHIFT pads onto their own status
+        // bytes — the clear chord must work without the 0x3F note
+        // ever arriving.
+        const translate = createFlx4Translator()
+        for (let pad = 0; pad < 4; pad++) {
+          expect(translate([status, 0x30 + pad, PRESS])).toEqual({
+            kind: 'loop_clear',
+            deck,
+            index: pad,
+          })
+        }
+        expect(translate([status, 0x30, RELEASE])).toBeNull()
+        expect(translate([status, 0x34, PRESS])).toBeNull() // beyond the slots
+        expect(translate([status, 0x10, PRESS])).toBeNull() // other banks stay unmapped
+      },
+    )
+
     it.each([[0x94], [0x95]])(
       'BEAT FX ON/OFF press on %s toggles recording',
       (status) => {

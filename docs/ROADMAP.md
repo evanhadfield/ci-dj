@@ -459,10 +459,12 @@ pair), the unit-tested seam and capture-bookkeeping math, the four-slot
 loop row with a persisted capture length, and the SAMPLER-bank mapping
 with truthful LEDs. Exit criteria verified on the physical device
 against [`m13-hardware-checklist.md`](m13-hardware-checklist.md) —
-every box ticked, including the monitor confirmations that the SAMPLER
-bank sits at the scheme's `0x30` base and that shifted pads keep their
-notes, so SHIFT + pad clears work soft-shift style like the M12 CFX
-handover.
+every box ticked, including the monitor confirmation that the SAMPLER
+bank sits at the scheme's `0x30` base. Post-checklist hardware use
+caught one firmware fact the spot-check missed: held SHIFT moves the
+pads onto the shift pad layer (`0x98`/`0x9A`) instead of keeping their
+status like the soft-shifted CFX knob, so the clear chord listens
+there too.
 
 **Goal:** a generative deck never plays the same thing twice — which is
 the magic and the problem. When the model lands on something great,

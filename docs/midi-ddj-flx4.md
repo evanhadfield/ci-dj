@@ -58,7 +58,7 @@ remains the verification tool.
 | Control | Message | → App intent |
 | ------- | ------- | ------------ |
 | Pads 1–4, SAMPLER mode, deck 1 / 2 | `0x97`/`0x99` notes `0x30`–`0x33` | freeze-loop slot: empty captures + freezes, filled swaps in, active returns to live; LED lit while filled. Bank base `0x30` confirmed by the 0x10-per-bank scheme |
-| SHIFT + SAMPLER pad | same notes, SHIFT tracked in software | clear the slot — verify with the monitor that shifted SAMPLER pads keep their notes (the shift pad layer `0x98`/`0x9A` may own them instead; the table gains rows if so) |
+| SHIFT + SAMPLER pad, deck 1 / 2 | `0x98`/`0x9A` notes `0x30`–`0x33` | clear the slot. Held SHIFT moves pads onto the shift pad layer — pads are **not** soft-shifted like the CFX knob (found on hardware: the `0x97`/`0x99` soft-shift path never fired). The translator keeps the soft-shift rows as well, in case other firmware keeps the pads put |
 
 On audio: the FLX4's USB sound card exposes 4 output channels at 48 kHz
 (measured via `system_profiler`) — 1/2 feed the MASTER RCA, 3/4 the

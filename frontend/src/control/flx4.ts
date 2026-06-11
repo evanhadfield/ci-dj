@@ -27,6 +27,10 @@ const PAD_DECK: Partial<Record<number, DeckId>> = {
   [PAD_STATUS_BY_DECK.a]: 'a',
   [PAD_STATUS_BY_DECK.b]: 'b',
 }
+/** Held SHIFT moves the pads onto their own status bytes (the shift
+ * pad layer from the Mixxx mapping) — pads are NOT soft-shifted like
+ * the CFX knob, so the clear chord listens on this layer too. */
+const SHIFT_PAD_DECK: Partial<Record<number, DeckId>> = { 0x98: 'a', 0x9a: 'b' }
 const BEAT_FX_STATUSES = [0x94, 0x95]
 const PLAY_NOTE = 0x0b
 const RECORD_NOTE = 0x47
@@ -139,6 +143,18 @@ function buttonIntent(
     return shift[padDeck]
       ? { kind: 'loop_clear', deck: padDeck, index }
       : { kind: 'loop_pad', deck: padDeck, index }
+  }
+  // SHIFT + SAMPLER pad arrives on the shift pad layer, not as a
+  // shifted note on the plain layer (the soft-shift branch above stays
+  // for firmware that does keep the pads put). Other shift-layer banks
+  // remain deliberately unmapped.
+  const shiftPadDeck = SHIFT_PAD_DECK[status]
+  if (
+    shiftPadDeck &&
+    note >= LOOP_NOTE_BASE &&
+    note < LOOP_NOTE_BASE + LOOP_SLOT_COUNT
+  ) {
+    return { kind: 'loop_clear', deck: shiftPadDeck, index: note - LOOP_NOTE_BASE }
   }
   if (BEAT_FX_STATUSES.includes(status) && note === RECORD_NOTE) {
     return { kind: 'record_toggle' }

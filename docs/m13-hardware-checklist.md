@@ -19,10 +19,11 @@ firmware's 0x10-per-bank scheme — verify it first:
 - [ ] Switch the pads to **SAMPLER** mode and press pad 1: the monitor
       shows `97 30 7F` (deck 1) / `99 30 7F` (deck 2). If a different
       note range appears, stop and record it.
-- [ ] Hold SHIFT and press SAMPLER pad 1: the monitor still shows the
-      `0x30`-range note (shift is software-tracked). If the shifted pad
-      sends from a different bank (`0x98`/`0x9A` or another note range),
-      stop and record it — the clear chord needs real rows then.
+- [ ] Hold SHIFT and press SAMPLER pad 1: the monitor shows the shift
+      pad layer — `98 30 7F` (deck 1) / `9A 30 7F` (deck 2). (First
+      found as a bug: the pads are not soft-shifted like the CFX knob;
+      the original soft-shift assumption never fired on hardware.) If
+      yet another range appears, stop and record it.
 
 ## Freeze, on a playing deck
 
