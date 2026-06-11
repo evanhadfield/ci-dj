@@ -27,6 +27,14 @@ import {
   LOOP_SLOT_COUNT,
   MIN_LOOP_SECONDS,
 } from './loops'
+import {
+  clipGuardCurve,
+  dbToGain,
+  LIMITER_ATTACK_SECONDS,
+  LIMITER_RATIO,
+  LIMITER_RELEASE_SECONDS,
+  LIMITER_THRESHOLD_DB,
+} from './master'
 import { interleaveChannels, MIN_STYLE_SAMPLE_SECONDS } from './styleSample'
 import { encodeWav, floatToInt16 } from './wav'
 
@@ -50,6 +58,9 @@ export type DeckChannel = {
   /** Off-air mutes the channel's master feed only — generation, meters,
    * and the cue tap stay live. The primed-deck state (M10). */
   setOnAir: (on: boolean) => void
+  /** Gain-staging trim at the chain head (M17): live stream and
+   * freeze loops alike, pre-EQ so kills stay the performer's move. */
+  setTrim: (db: number) => void
   /** Freeze pads (M13, ADR-0009): capture the just-played tail into a
    * slot. Resolves false when too little has been played to loop. */
   captureLoop: (slot: number, seconds: number) => Promise<boolean>
@@ -83,6 +94,7 @@ export type AudioEngine = {
       eq: Record<EqBand, number>
       cue: boolean
       fx: { kind: FxKind | null; amount: number }
+      trimDb: number
     },
     onStats: StatsHandler,
   ) => Promise<DeckChannel>
@@ -101,6 +113,8 @@ export type AudioEngine = {
   stopCueCapture: () => void
   /** Master-bus RMS level, 0..~1 (what the speakers get). */
   getMasterLevel: () => number
+  /** The limiter's current gain reduction in dB (≤ 0); 0 when idle. */
+  getMasterGainReduction: () => number
   /** Start capturing the master bus (exactly the speaker feed). */
   startRecording: () => Promise<void>
   /** Stop capturing and return the session as a WAV blob. */
@@ -141,6 +155,9 @@ export function equalPowerGains(position: number): { a: number; b: number } {
 type Bus = {
   context: AudioContext
   master: GainNode
+  /** Post-limiter (M17): what the speakers, the recorder, and the
+   * phones' master blend actually receive. */
+  limited: WaveShaperNode
   masterAnalyser: AnalyserNode
   crossfade: Record<DeckId, GainNode>
   cueBus: GainNode
@@ -175,6 +192,7 @@ export function createAudioEngine(): AudioEngine {
   // Mirrors bus.masterAnalyser: getMasterLevel must be synchronous (meters
   // poll it every frame) while the bus itself sits behind a promise.
   let masterAnalyserRef: AnalyserNode | null = null
+  let limiterRef: DynamicsCompressorNode | null = null
   let masterBuffer: Uint8Array<ArrayBuffer> | null = null
 
   async function buildBus(): Promise<Bus> {
@@ -182,10 +200,25 @@ export function createAudioEngine(): AudioEngine {
     try {
       await context.audioWorklet.addModule('/player-worklet.js')
       const master = context.createGain()
-      master.connect(context.destination)
+      // Master housekeeping (M17): compressor-as-limiter for the
+      // musical work, clip guard for the hard ceiling. Everything
+      // downstream — speakers, meter, recorder, the phones' master
+      // blend — hears the limited signal: the WAV is what was heard.
+      const limiter = context.createDynamicsCompressor()
+      limiter.threshold.value = LIMITER_THRESHOLD_DB
+      limiter.knee.value = 0
+      limiter.ratio.value = LIMITER_RATIO
+      limiter.attack.value = LIMITER_ATTACK_SECONDS
+      limiter.release.value = LIMITER_RELEASE_SECONDS
+      const limited = context.createWaveShaper()
+      limited.curve = clipGuardCurve()
+      master.connect(limiter)
+      limiter.connect(limited)
+      limited.connect(context.destination)
+      limiterRef = limiter
       const masterAnalyser = context.createAnalyser()
       masterAnalyser.fftSize = ANALYSER_FFT_SIZE
-      master.connect(masterAnalyser)
+      limited.connect(masterAnalyser)
       masterAnalyserRef = masterAnalyser
       masterBuffer = new Uint8Array(masterAnalyser.fftSize)
       const gains = equalPowerGains(crossfadePosition)
@@ -208,12 +241,13 @@ export function createAudioEngine(): AudioEngine {
       const cueOut = context.createMediaStreamDestination()
       cueBus.connect(cueLevel)
       cueLevel.connect(cueFeed)
-      master.connect(cueMonitor)
+      limited.connect(cueMonitor)
       cueMonitor.connect(cueFeed)
       cueFeed.connect(cueOut)
       return {
         context,
         master,
+        limited,
         masterAnalyser,
         crossfade,
         cueBus,
@@ -274,12 +308,18 @@ export function createAudioEngine(): AudioEngine {
       const loopGain = bus.context.createGain()
       loopGain.gain.value = 0
       worklet.connect(liveGain)
-      let head: AudioNode = liveGain
+      // Trim (M17) is the summing head: live stream and freeze loops
+      // alike pass through it, pre-EQ — gain staging compensates the
+      // SOURCE, kills and effects stay the performer's moves.
+      const trim = bus.context.createGain()
+      trim.gain.value = dbToGain(initial.trimDb)
+      liveGain.connect(trim)
+      loopGain.connect(trim)
+      let head: AudioNode = trim
       for (const band of EQ_BANDS) {
         head.connect(eqNodes[band])
         head = eqNodes[band]
       }
-      loopGain.connect(eqNodes[EQ_BANDS[0]])
       // Color FX insert (M12, ADR-0008): a parallel pair — unity dry
       // branch and the active effect's graph — summed into `post`, the
       // point both the cue tap and the fader read, so the phones preview
@@ -446,6 +486,12 @@ export function createAudioEngine(): AudioEngine {
             PARAM_RAMP_SECONDS,
           )
         },
+        setTrim(db) {
+          // Slower than the control ramp: trim is gain staging, and
+          // the auto updates arrive once a second — a glide, not a
+          // step.
+          trim.gain.setTargetAtTime(dbToGain(db), bus.context.currentTime, 0.2)
+        },
         async captureLoop(slot, seconds) {
           if (slot < 0 || slot >= LOOP_SLOT_COUNT) return false
           const rate = bus.context.sampleRate
@@ -525,6 +571,7 @@ export function createAudioEngine(): AudioEngine {
           stopLoopSource(bus.context.currentTime)
           liveGain.disconnect()
           loopGain.disconnect()
+          trim.disconnect()
           for (const band of EQ_BANDS) eqNodes[band].disconnect()
           fxGraph?.dispose()
           for (const node of [fxDry, fxSend, fxWet, post]) node.disconnect()
@@ -560,7 +607,7 @@ export function createAudioEngine(): AudioEngine {
           chunks.push(floatToInt16(event.data.samples as Float32Array))
         }
       }
-      bus.master.connect(node)
+      bus.limited.connect(node)
       node.port.postMessage({ type: 'start' })
       recorder = { node, chunks }
     },
@@ -593,7 +640,7 @@ export function createAudioEngine(): AudioEngine {
           node.port.postMessage({ type: 'stop' })
         })
       } finally {
-        bus.master.disconnect(node)
+        bus.limited.disconnect(node)
       }
       return encodeWav(chunks, SAMPLE_RATE, 2)
     },
@@ -601,6 +648,10 @@ export function createAudioEngine(): AudioEngine {
     getMasterLevel() {
       if (!masterBuffer || !masterAnalyserRef) return 0
       return rmsLevel(masterAnalyserRef, masterBuffer)
+    },
+
+    getMasterGainReduction() {
+      return limiterRef?.reduction ?? 0
     },
 
     setCueMix(position) {
