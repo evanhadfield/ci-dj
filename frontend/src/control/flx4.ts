@@ -192,10 +192,15 @@ export function createFlx4Translator(): Flx4Translator {
     }
 
     // The browse rotary is relative — its CC must not enter the
-    // absolute MSB/LSB machinery below.
+    // absolute MSB/LSB machinery below. The magnitude is real: a fast
+    // turn packs several clicks into one message (0x02 = two CW,
+    // 0x7E = two CCW in two's complement).
     if (status === MIXER_STATUS && number === BROWSE_CC) {
       if (value === 0 || value === 0x40) return null
-      return { kind: 'crate_scroll', direction: value < 0x40 ? 1 : -1 }
+      return {
+        kind: 'crate_scroll',
+        steps: value < 0x40 ? value : value - 0x80,
+      }
     }
 
     const msbBuild = ccBuilder(status, number, shiftHeld)

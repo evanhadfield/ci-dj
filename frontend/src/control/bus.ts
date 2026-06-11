@@ -24,7 +24,7 @@ export type ControlIntent =
   // Crates (M16): browse-rotary highlight moves and LOAD presses are
   // handled by the crate browser; a chosen preset's pad portion rides
   // the bus to the owning deck column.
-  | { kind: 'crate_scroll'; direction: 1 | -1 }
+  | { kind: 'crate_scroll'; steps: number }
   | { kind: 'crate_load'; deck: DeckId }
   | { kind: 'preset_load'; deck: DeckId; preset: StylePreset }
 

@@ -23,9 +23,11 @@
     "empty": "No presets yet — save a deck's style below its pad",
     "highlight": "Select preset {{name}}",
     "loadTo": "Load {{name}} to deck {{deck}}",
+    "loadShort": "→ {{deck}}",
     "delete": "Remove preset {{name}}",
     "export": "Export",
     "import": "Import",
+    "importFile": "Crates file",
     "importFailed": "Import failed: {{message}}"
   },
   "mixer": {

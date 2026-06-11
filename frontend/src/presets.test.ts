@@ -38,10 +38,45 @@ describe('parsePreset', () => {
     ['no name', { ...FUNK, name: '   ' }],
     ['no targets', { ...FUNK, targets: [] }],
     ['malformed target', { ...FUNK, targets: [{ text: 7, x: 0, y: 0 }] }],
+    [
+      // Import is a trust boundary: the pad caps at 8 and the backend
+      // rejects styles beyond it — a file must not sneak past.
+      'more targets than the pad holds',
+      {
+        ...FUNK,
+        targets: Array.from({ length: 9 }, (_, i) => ({
+          text: `style ${i}`,
+          x: 0.5,
+          y: 0.5,
+        })),
+      },
+    ],
+    [
+      'duplicate target texts',
+      {
+        ...FUNK,
+        targets: [
+          { text: 'funk', x: 0.2, y: 0.2 },
+          { text: ' funk ', x: 0.8, y: 0.8 },
+        ],
+      },
+    ],
+    [
+      'a whitespace-only target',
+      { ...FUNK, targets: [{ text: '   ', x: 0.5, y: 0.5 }] },
+    ],
     ['unknown fx kind', { ...FUNK, fx: { kind: 'megaverb', amount: 0 } }],
     ['not an object', 'funk'],
   ])('rejects a preset with %s', (_label, raw) => {
     expect(parsePreset(raw)).toBeNull()
+  })
+
+  it('trims target texts so they match what the pad would key', () => {
+    const parsed = parsePreset({
+      ...FUNK,
+      targets: [{ text: '  funk  ', x: 0.5, y: 0.5 }],
+    })
+    expect(parsed!.targets[0].text).toBe('funk')
   })
 })
 

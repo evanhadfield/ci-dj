@@ -271,19 +271,24 @@ describe('createFlx4Translator', () => {
       })
     })
 
-    it('translates browse-rotary ticks as relative scrolls', () => {
+    it('translates browse-rotary ticks as signed relative steps', () => {
       const translate = createFlx4Translator()
       expect(translate([0xb6, 0x40, 0x01])).toEqual({
         kind: 'crate_scroll',
-        direction: 1,
+        steps: 1,
       })
+      // A fast turn packs several clicks into one message.
       expect(translate([0xb6, 0x40, 0x02])).toEqual({
         kind: 'crate_scroll',
-        direction: 1,
+        steps: 2,
       })
       expect(translate([0xb6, 0x40, 0x7f])).toEqual({
         kind: 'crate_scroll',
-        direction: -1,
+        steps: -1,
+      })
+      expect(translate([0xb6, 0x40, 0x7e])).toEqual({
+        kind: 'crate_scroll',
+        steps: -2,
       })
       expect(translate([0xb6, 0x40, 0x00])).toBeNull()
     })
@@ -299,7 +304,7 @@ describe('createFlx4Translator', () => {
     it.each([
       [0x46, 'a'],
       [0x47, 'b'],
-    ] as const)('LOAD (note 0x%s) loads the crate onto deck %s', (note, deck) => {
+    ] as const)('LOAD (note %d) loads the crate onto deck %s', (note, deck) => {
       const translate = createFlx4Translator()
       expect(translate([0x96, note, PRESS])).toEqual({
         kind: 'crate_load',

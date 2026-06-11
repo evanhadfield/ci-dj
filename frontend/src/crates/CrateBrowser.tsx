@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { DeckId } from '../audio/engine'
@@ -35,20 +35,29 @@ export function CrateBrowser({ presets, onLoad, onDelete, onImport }: CrateBrows
   const [index, setIndex] = useState(0)
   const [importError, setImportError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  const highlightedRow = useRef<HTMLLIElement>(null)
   // The stored index may point past the end after a delete; the
   // clamped value is the single truth everywhere below.
   const highlighted = presets.length === 0 ? -1 : Math.min(index, presets.length - 1)
 
+  // The list scrolls past ~8 presets; the rotary's highlight must stay
+  // visible. (Optional call: jsdom has no scrollIntoView.)
+  useLayoutEffect(() => {
+    highlightedRow.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [highlighted])
+
   // Hardware intents (M16): rotary turn = highlight, LOAD = load the
-  // highlighted preset. Resubscribes per render to read fresh state.
+  // highlighted preset. Resubscribes per render to read fresh state;
+  // the functional update keeps back-to-back ticks lossless.
   const bus = useControlBus()
   useEffect(() =>
     bus.subscribe((intent) => {
       if (intent.kind === 'crate_scroll') {
         if (presets.length === 0) return
-        setIndex(
-          Math.max(0, Math.min(presets.length - 1, highlighted + intent.direction)),
-        )
+        setIndex((current) => {
+          const from = Math.min(current, presets.length - 1)
+          return Math.max(0, Math.min(presets.length - 1, from + intent.steps))
+        })
       } else if (intent.kind === 'crate_load') {
         const preset = presets[highlighted]
         if (preset) onLoad(intent.deck, preset)
@@ -75,6 +84,7 @@ export function CrateBrowser({ presets, onLoad, onDelete, onImport }: CrateBrows
           {presets.map((preset, presetIndex) => (
             <li
               key={preset.name}
+              ref={presetIndex === highlighted ? highlightedRow : null}
               className={`crates__item${
                 presetIndex === highlighted ? ' crates__item--highlighted' : ''
               }`}
@@ -96,7 +106,7 @@ export function CrateBrowser({ presets, onLoad, onDelete, onImport }: CrateBrows
                   })}
                   onClick={() => onLoad(deck, preset)}
                 >
-                  {`→ ${deck.toUpperCase()}`}
+                  {t('crates.loadShort', { deck: deck.toUpperCase() })}
                 </Button>
               ))}
               <Button
@@ -121,7 +131,7 @@ export function CrateBrowser({ presets, onLoad, onDelete, onImport }: CrateBrows
           className="crates__file"
           type="file"
           accept="application/json,.json"
-          aria-label={t('crates.import')}
+          aria-label={t('crates.importFile')}
           onChange={(event) => {
             const file = event.target.files?.[0]
             if (file) void importFile(file)

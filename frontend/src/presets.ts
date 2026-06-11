@@ -20,15 +20,19 @@ export type StylePreset = {
 }
 
 export const MAX_PRESET_NAME_LENGTH = 48
+/** Matches the backend's MAX_STYLE_PROMPTS — a pad (and therefore a
+ * preset) holds at most this many targets. The single source for the
+ * pad's own cap too (DeckColumn imports it). */
+export const MAX_PRESET_TARGETS = 8
 
 /** The export file format; versioned so a future shape can migrate. */
 const EXPORT_VERSION = 1
 
-function clamp01(value: number) {
+export function clamp01(value: number) {
   return Math.min(1, Math.max(0, value))
 }
 
-function isPoint(value: unknown): value is PadPoint {
+export function isPoint(value: unknown): value is PadPoint {
   const point = value as PadPoint
   return (
     typeof point === 'object' &&
@@ -49,10 +53,18 @@ export function parsePreset(value: unknown): StylePreset | null {
   if (
     !Array.isArray(raw.targets) ||
     raw.targets.length === 0 ||
+    raw.targets.length > MAX_PRESET_TARGETS ||
     !raw.targets.every(
       (target) => isPoint(target) && typeof target.text === 'string' && target.text,
     )
   ) {
+    return null
+  }
+  // Import is a trust boundary: the pad keys targets by text, and the
+  // backend rejects styles over the prompt cap — a file must not be
+  // able to put the deck in a state the UI itself cannot reach.
+  const texts = raw.targets.map((target) => target.text.trim())
+  if (texts.some((text) => !text) || new Set(texts).size !== texts.length) {
     return null
   }
   if (!isPoint(raw.cursor)) return null
@@ -67,8 +79,8 @@ export function parsePreset(value: unknown): StylePreset | null {
   }
   return {
     name,
-    targets: raw.targets.map((target) => ({
-      text: target.text,
+    targets: raw.targets.map((target, index) => ({
+      text: texts[index],
       x: clamp01(target.x),
       y: clamp01(target.y),
     })),

@@ -7,7 +7,7 @@ import { FX_KINDS, type FxKind } from './audio/fx'
 import { LOOP_LENGTH_OPTIONS } from './audio/loops'
 import type { AudioOutputDevice } from './audio/outputs'
 import type { PadPoint } from './deck/padWeights'
-import { parsePreset, type StylePreset } from './presets'
+import { clamp01, isPoint, parsePreset, type StylePreset } from './presets'
 
 export type DeckSettings = {
   targets: (PadPoint & { text: string })[]
@@ -27,10 +27,6 @@ export type AppSettings = {
 }
 
 const STORAGE_KEY = 'magenta-dj:v1'
-
-function clamp01(value: number) {
-  return Math.min(1, Math.max(0, value))
-}
 
 type Persisted = {
   decks?: Partial<Record<DeckId, Partial<DeckSettings>>>
@@ -54,16 +50,6 @@ function write(persisted: Persisted) {
   } catch {
     // Storage full or unavailable — settings just don't persist.
   }
-}
-
-function isPoint(value: unknown): value is PadPoint {
-  const point = value as PadPoint
-  return (
-    typeof point === 'object' &&
-    point !== null &&
-    Number.isFinite(point.x) &&
-    Number.isFinite(point.y)
-  )
 }
 
 export function loadDeckSettings(deckId: DeckId): Partial<DeckSettings> {

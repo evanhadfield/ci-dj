@@ -70,12 +70,12 @@ describe('CrateBrowser', () => {
       screen.getByRole('button', { name: 'Select preset Warm funk' }),
     ).toHaveAttribute('aria-current', 'true')
 
-    act(() => bus.publish({ kind: 'crate_scroll', direction: 1 }))
+    act(() => bus.publish({ kind: 'crate_scroll', steps: 1 }))
     expect(
       screen.getByRole('button', { name: 'Select preset Dub session' }),
     ).toHaveAttribute('aria-current', 'true')
     // The end of the list clamps rather than wrapping.
-    act(() => bus.publish({ kind: 'crate_scroll', direction: 1 }))
+    act(() => bus.publish({ kind: 'crate_scroll', steps: 1 }))
     expect(
       screen.getByRole('button', { name: 'Select preset Dub session' }),
     ).toHaveAttribute('aria-current', 'true')
@@ -84,11 +84,24 @@ describe('CrateBrowser', () => {
     expect(onLoad).toHaveBeenCalledWith('a', DUB)
   })
 
+  it('a fast multi-click tick moves the highlight by its magnitude', () => {
+    const bus = createControlBus()
+    renderBrowser([FUNK, DUB, { ...FUNK, name: 'Third' }], {}, bus)
+    act(() => bus.publish({ kind: 'crate_scroll', steps: 2 }))
+    expect(
+      screen.getByRole('button', { name: 'Select preset Third' }),
+    ).toHaveAttribute('aria-current', 'true')
+    act(() => bus.publish({ kind: 'crate_scroll', steps: -2 }))
+    expect(
+      screen.getByRole('button', { name: 'Select preset Warm funk' }),
+    ).toHaveAttribute('aria-current', 'true')
+  })
+
   it('ignores hardware loads while the crate is empty', () => {
     const onLoad = vi.fn()
     const bus = createControlBus()
     renderBrowser([], { onLoad }, bus)
-    act(() => bus.publish({ kind: 'crate_scroll', direction: 1 }))
+    act(() => bus.publish({ kind: 'crate_scroll', steps: 1 }))
     act(() => bus.publish({ kind: 'crate_load', deck: 'a' }))
     expect(onLoad).not.toHaveBeenCalled()
   })
@@ -101,7 +114,7 @@ describe('CrateBrowser', () => {
         <CrateBrowser presets={[FUNK, DUB]} onLoad={onLoad} onDelete={vi.fn()} onImport={vi.fn()} />
       </ControlBusProvider>,
     )
-    act(() => bus.publish({ kind: 'crate_scroll', direction: 1 })) // → DUB
+    act(() => bus.publish({ kind: 'crate_scroll', steps: 1 })) // → DUB
     rerender(
       <ControlBusProvider bus={bus}>
         <CrateBrowser presets={[FUNK]} onLoad={onLoad} onDelete={vi.fn()} onImport={vi.fn()} />
@@ -126,7 +139,7 @@ describe('CrateBrowser', () => {
   it('imports a crates file and surfaces a bad one', async () => {
     const onImport = vi.fn()
     renderBrowser([], { onImport })
-    const input = screen.getByLabelText('Import', { selector: 'input' })
+    const input = screen.getByLabelText('Crates file')
 
     const good = new File([serialisePresets([FUNK])], 'crates.json')
     fireEvent.change(input, { target: { files: [good] } })

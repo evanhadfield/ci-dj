@@ -17,7 +17,11 @@ import { WaveformStrip } from '../ui/WaveformStrip'
 import { XYPad } from '../ui/XYPad'
 import { isDeckOperable, type ActiveStyle, type DeckState } from './deckState'
 import { padWeights, spawnPosition, sweepPosition, type PadPoint } from './padWeights'
-import { MAX_PRESET_NAME_LENGTH, type StylePreset } from '../presets'
+import {
+  MAX_PRESET_NAME_LENGTH,
+  MAX_PRESET_TARGETS,
+  type StylePreset,
+} from '../presets'
 import type { LoopState } from './useDeck'
 import { loadDeckSettings, updateDeckSettings } from '../persistence'
 import './deck.css'
@@ -25,8 +29,8 @@ import './deck.css'
 // The worker holds ~3s of lead (see backend worker pacing); the meter shows
 // health relative to that target.
 const BUFFER_TARGET_SECONDS = 3
-// Matches the backend's MAX_STYLE_PROMPTS.
-const MAX_TARGETS = 8
+// One source for the pad cap (mirrors the backend's MAX_STYLE_PROMPTS).
+const MAX_TARGETS = MAX_PRESET_TARGETS
 // Cursor drags re-blend cached embeddings server-side; ~7/s is plenty when
 // styles land at chunk boundaries anyway.
 const STYLE_SEND_INTERVAL_MS = 150
