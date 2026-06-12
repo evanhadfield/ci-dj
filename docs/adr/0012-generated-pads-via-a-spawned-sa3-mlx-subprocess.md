@@ -82,8 +82,11 @@ and what happens when it's missing or fails.
   a dedicated clip queue, matched to requests by id with stale
   answers discarded, and the endpoint returns a float32 WAV (IEEE
   format 3 — no quantisation between the worker and
-  `decodeAudioData`). The deck workers keep their `playing` refusal
-  as a safety net, but nothing routes renders at them anymore.
+  `decodeAudioData`). A render that misses its deadline gets its
+  worker killed, so the next request respawns clean instead of
+  inheriting the wedge. The deck workers, which carry no clip queue,
+  drop a misrouted render with a warning as a safety net — nothing
+  routes renders at them anymore.
 
 ## Consequences
 

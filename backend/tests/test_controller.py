@@ -22,6 +22,12 @@ class FakeProcess:
     def is_alive(self):
         return self.alive
 
+    def terminate(self):
+        self.alive = False
+
+    def join(self, timeout=None):
+        pass
+
 
 class FakeDeck:
     def __init__(self):
@@ -553,6 +559,47 @@ def test_render_respawns_a_dead_worker(client, render_worker, monkeypatch):
     response = client.post("/api/render", json={"prompt": "x", "seconds": 2.0})
     assert response.status_code == 200
     assert spawned.ready_waits == 1
+
+
+def test_render_timeout_kills_the_wedged_worker(client, render_worker, monkeypatch):
+    # No configured response: the worker never answers — wedged. The kill
+    # plus reset lets the next request respawn clean instead of burning
+    # the full timeout against the same wedge (and a late answer from a
+    # merely-slow worker can never land in a stranger's request).
+    monkeypatch.setattr(controller, "RENDER_TIMEOUT_SECONDS", 0.05)
+    response = client.post("/api/render", json={"prompt": "air horn", "seconds": 2.0})
+    assert response.status_code == 502
+    assert not render_worker.process.is_alive()
+    assert controller.render_state["worker"] is None
+
+
+def test_render_fails_fast_when_handed_a_dead_worker(
+    client, render_worker, monkeypatch
+):
+    # A request queued on the lock can hold a worker another request just
+    # killed; the in-lock liveness check answers at once instead of
+    # burning the render timeout against the corpse.
+    def handed_a_corpse():
+        render_worker.process.alive = False
+        return render_worker
+
+    monkeypatch.setattr(controller, "ensure_render_worker", handed_a_corpse)
+    monkeypatch.setattr(controller, "RENDER_TIMEOUT_SECONDS", 0.05)
+    response = client.post("/api/render", json={"prompt": "air horn", "seconds": 2.0})
+    assert response.status_code == 502
+    assert response.json()["detail"] == "render engine died"
+    assert controller.render_state["worker"] is None
+
+
+def test_render_start_failure_discards_the_worker(client, render_worker):
+    def never_ready():
+        raise queue.Empty
+
+    render_worker.await_ready = never_ready
+    response = client.post("/api/render", json={"prompt": "air horn", "seconds": 2.0})
+    assert response.status_code == 502
+    assert not render_worker.process.is_alive()
+    assert controller.render_state["worker"] is None
 
 
 @pytest.mark.parametrize(

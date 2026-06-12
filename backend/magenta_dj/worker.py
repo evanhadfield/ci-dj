@@ -79,7 +79,14 @@ def run_deck_worker(
             elif kind == "render_clip":
                 # Worker-side gate, where the truth lives: rendering on a
                 # playing deck would stall the pacing loop for seconds.
-                if playing:
+                if clip_queue is None:
+                    # Deck workers ship without a clip queue — only the
+                    # render worker gets one. A misrouted render has nowhere
+                    # to answer; drop it rather than crash the stream.
+                    logger.warning(
+                        "deck %s: render_clip with no clip queue; dropped", deck_id
+                    )
+                elif playing:
                     clip_queue.put((cmd["id"], {"error": "deck is playing"}))
                 else:
                     try:

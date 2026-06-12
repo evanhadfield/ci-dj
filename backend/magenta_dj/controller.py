@@ -462,6 +462,18 @@ def ensure_render_worker() -> RenderProcess:
     return worker
 
 
+def discard_render_worker(worker: RenderProcess) -> None:
+    """Kill a worker that missed its deadline. Past the timeout it is wedged,
+    not slow (see RENDER_TIMEOUT_SECONDS) — and even a merely-slow one must
+    die, or its late answer would land in the next request's queue. The next
+    call respawns clean via ensure_render_worker."""
+    if worker.process.is_alive():
+        worker.process.terminate()
+        worker.process.join(timeout=5)
+    if render_state["worker"] is worker:
+        render_state["worker"] = None
+
+
 def float32_wav(pcm: bytes, sample_rate: int, channels: int) -> bytes:
     """Wrap wire-format PCM in a WAVE_FORMAT_IEEE_FLOAT header — what
     decodeAudioData expects, with no quantisation on the way."""
@@ -517,9 +529,16 @@ async def render_clip(request: Request) -> Response:
         )
     worker = ensure_render_worker()
     async with worker.render_lock:
+        # A request that queued on the lock may hold a worker another
+        # request just killed; fail fast rather than burn the timeout
+        # against the corpse.
+        if not worker.process.is_alive():
+            discard_render_worker(worker)
+            raise HTTPException(status_code=502, detail="render engine died")
         try:
             await asyncio.to_thread(worker.await_ready)
         except (queue.Empty, RuntimeError):
+            discard_render_worker(worker)
             raise HTTPException(
                 status_code=502, detail="render engine failed to start"
             ) from None
@@ -542,6 +561,7 @@ async def render_clip(request: Request) -> Response:
                 worker.clip_queue.get, True, RENDER_TIMEOUT_SECONDS
             )
         except queue.Empty:
+            discard_render_worker(worker)
             raise HTTPException(status_code=502, detail="render timed out") from None
     if result_id != request_id:
         raise HTTPException(status_code=502, detail="render answered out of turn")

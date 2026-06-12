@@ -22,7 +22,7 @@ import {
   MAX_PRESET_TARGETS,
   type StylePreset,
 } from '../presets'
-import type { GenerateEngine, LoopState } from './useDeck'
+import { GENERATE_PROMPT_MAX_LENGTH, type GenerateEngine, type LoopState } from './useDeck'
 import { loadDeckSettings, updateDeckSettings } from '../persistence'
 import './deck.css'
 
@@ -717,6 +717,7 @@ export function DeckColumn({
             <TextField
               label={t('deck.generate.prompt')}
               value={generateDraft}
+              maxLength={GENERATE_PROMPT_MAX_LENGTH}
               disabled={!connected}
               onChange={(event) => setGenerateDraft(event.target.value)}
               onKeyDown={(event) => {

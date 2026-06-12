@@ -50,11 +50,13 @@ class FakeEngine:
 
 
 class DeckHarness:
-    def __init__(self):
+    def __init__(self, with_clip_queue=True):
         self.engine = FakeEngine()
         self.cmd_queue = queue.Queue()
         self.out_queue = queue.Queue()
-        self.clip_queue = queue.Queue()
+        # Production deck workers run without a clip queue — only the
+        # render worker gets one (M18).
+        self.clip_queue = queue.Queue() if with_clip_queue else None
         self.thread = threading.Thread(
             target=run_deck_worker,
             args=("test", "fake", self.cmd_queue, self.out_queue),
@@ -206,3 +208,20 @@ def test_render_failure_answers_an_error_and_worker_survives(deck):
 
     deck.send(type="play")
     assert deck.next_event("audio") == FAKE_PCM
+
+
+def test_render_clip_with_no_clip_queue_is_dropped_not_fatal():
+    # A misrouted render at a queue-less deck worker has nowhere to
+    # answer; it must be dropped, not crash the stream (ADR-0012).
+    harness = DeckHarness(with_clip_queue=False)
+    harness.thread.start()
+    harness.next_event("ready")
+    harness.send(type="render_clip", id="clip-9", prompt="air horn", seconds=2.0)
+    harness.send(type="set_prompt", prompt="proof of life")
+    assert harness.next_event("style_applied")["prompts"] == [
+        {"text": "proof of life", "weight": 1.0}
+    ]
+    assert harness.engine.renders == []
+    harness.send(type="shutdown")
+    harness.thread.join(timeout=2)
+    assert not harness.thread.is_alive()

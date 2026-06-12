@@ -1060,6 +1060,16 @@ describe('DeckColumn', () => {
     expect(onGenerateToPad).toHaveBeenCalledWith('dub chords', 'magenta', true)
   })
 
+  it('caps the prompt input short of the backend limit, sparing the BPM stamp', () => {
+    generateRow()
+    // 500 (the backend cap) minus room for ", NNN BPM" — so a prompt the
+    // input accepted can never bounce off the backend once stamped.
+    expect(screen.getByLabelText('Generate prompt')).toHaveAttribute(
+      'maxlength',
+      '491',
+    )
+  })
+
   it('refuses to generate without a prompt or an empty slot', () => {
     const fullSlots: LoopState = {
       ...emptyLoop(),

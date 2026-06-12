@@ -48,6 +48,10 @@ export type LoopState = {
 
 export type GenerateEngine = 'sfx' | 'music' | 'magenta'
 
+/** The backend caps prompts at 500 chars; the input stops short of it so
+ * the BPM stamp (", NNN BPM") can never push a legal prompt over the cap. */
+export const GENERATE_PROMPT_MAX_LENGTH = 500 - ', 999 BPM'.length
+
 const EMPTY_SLOT: LoopSlot = { state: 'empty' }
 
 function withSlot(current: LoopState, slot: number, value: LoopSlot): LoopSlot[] {
@@ -604,6 +608,9 @@ export function useDeck(deckId: DeckId): DeckControls {
           if (!(await channel.loadGeneratedLoop(slot, wav, oneShot))) {
             throw new Error('generated audio could not be decoded')
           }
+          // A clear landing mid-decode wins: the slot stays empty in the
+          // UI and the channel's orphaned buffer waits for the next
+          // capture to overwrite it.
           if (stale()) return
           const latest = loopRef.current
           setLoop({
