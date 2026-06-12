@@ -3,12 +3,13 @@
 default:
     @just --list
 
-# One-time setup: backend deps, model weights (Magenta + Stable Audio 3),
-# frontend deps + build.
+# One-time setup: backend deps, all model weights (both Magenta deck
+# models + Stable Audio 3), frontend deps + build.
 setup:
     cd backend && uv sync
     cd backend && uv run mrt models init
     cd backend && uv run mrt models download mrt2_small
+    cd backend && uv run mrt models download mrt2_base
     just setup-sa3
     cd frontend && npm install
     just build
@@ -45,10 +46,6 @@ setup-sa3:
         --dit "$1" --decoder "$2" --seconds 1 --steps 1 --out "$out")
       rm -f "$out"
     done
-
-# Optional: the higher-quality deck model (per-deck picker in the UI).
-download-base-model:
-    cd backend && uv run mrt models download mrt2_base
 
 # Build the frontend (the backend serves frontend/dist).
 build:
