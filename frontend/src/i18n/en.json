@@ -89,11 +89,11 @@
     "record": "Record",
     "stopRecording": "Stop recording",
     "recordingFor": "REC {{time}}",
-    "recordingError": "Recording failed: {{message}}"
+    "recordingError": "Recording failed: {{message}}",
+    "phase": "Beat phase"
   },
   "deck": {
     "title": "Deck {{id}}",
-    "waveform": "Deck {{id}} signal",
     "model": {
       "label": "Model"
     },
@@ -175,7 +175,11 @@
       "title": "Track",
       "overview": "Track overview {{id}}",
       "time": "{{position}} / {{duration}}",
-      "backToLive": "Back to live"
+      "backToLive": "Back to live",
+      "tempo": "Tempo",
+      "sync": "Sync",
+      "syncOutOfRange": "Sync refused — tempo out of range",
+      "syncNoTempo": "Sync refused — no tempo to sync to"
     },
     "health": {
       "buffer": "Buffer",
@@ -189,6 +193,17 @@
     },
     "error": {
       "message": "Deck error: {{message}}"
+    }
+  },
+  "beatview": {
+    "title": "Beat view",
+    "deck": "Deck {{id}} close-up",
+    "layout": "Beat view",
+    "layouts": {
+      "center": "Center",
+      "vertical": "Vertical",
+      "top": "Top bar",
+      "off": "Off"
     }
   }
 }

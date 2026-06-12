@@ -37,7 +37,6 @@ function renderPanel(
       <DeckColumn
         deckId="a"
         state={{ ...initialDeckState, ...state }}
-        getWaveformRange={() => [0, 0]}
         onPlay={handlers.onPlay ?? noop}
         onStop={handlers.onStop ?? noop}
         onSetStyle={(handlers.onSetStyle as (s: object) => void) ?? noop}
@@ -75,6 +74,10 @@ function renderPanel(
         track={playback.track}
         onLeavePlayback={handlers.onLeavePlayback ?? noop}
         onSeekTrack={(handlers.onSeekTrack as (s: number) => void) ?? noop}
+        onSetTrackRate={(handlers.onSetTrackRate as (r: number) => void) ?? noop}
+        onSyncTrack={
+          (handlers.onSyncTrack as () => 'synced') ?? (() => 'synced' as const)
+        }
         getTrackPeaks={() => null}
       />
     </ControlBusProvider>,
@@ -262,7 +265,6 @@ describe('DeckColumn', () => {
         <DeckColumn
           deckId="a"
           state={{ ...initialDeckState, connection: 'open', switchingModel: true }}
-          getWaveformRange={() => [0, 0]}
           onPlay={noop}
           onStop={noop}
           onSetStyle={onSetStyle as (s: object) => void}
@@ -285,6 +287,8 @@ describe('DeckColumn', () => {
           track={null}
           onLeavePlayback={noop}
           onSeekTrack={noop as (s: number) => void}
+          onSetTrackRate={noop as (r: number) => void}
+          onSyncTrack={() => 'synced' as const}
           getTrackPeaks={() => null}
         />
       </ControlBusProvider>,
@@ -730,7 +734,6 @@ describe('DeckColumn', () => {
               connection: 'open',
               activeStyle: { prompts: [{ text: 'x', weight: 1 }] },
             }}
-            getWaveformRange={() => [0, 0]}
             onPlay={noop}
             onStop={noop}
             onSetStyle={onSetStyle as (s: object) => void}
@@ -753,6 +756,8 @@ describe('DeckColumn', () => {
             track={null}
             onLeavePlayback={noop}
             onSeekTrack={noop as (s: number) => void}
+            onSetTrackRate={noop as (r: number) => void}
+            onSyncTrack={() => 'synced' as const}
             getTrackPeaks={() => null}
           />
         </ControlBusProvider>
@@ -837,7 +842,6 @@ describe('DeckColumn', () => {
         <DeckColumn
           deckId="a"
           state={{ ...initialDeckState, connection: 'open', workerDied: true }}
-          getWaveformRange={() => [0, 0]}
           onPlay={noop}
           onStop={noop}
           onSetStyle={noop as (s: object) => void}
@@ -860,6 +864,8 @@ describe('DeckColumn', () => {
           track={null}
           onLeavePlayback={noop}
           onSeekTrack={noop as (s: number) => void}
+          onSetTrackRate={noop as (r: number) => void}
+          onSyncTrack={() => 'synced' as const}
           getTrackPeaks={() => null}
         />
       </ControlBusProvider>,
@@ -1190,6 +1196,8 @@ describe('DeckColumn playback mode (M19)', () => {
     playing: false,
     ended: false,
     bpm: 132.5,
+    grid: null,
+    rate: 1,
     ...overrides,
   })
 
@@ -1257,6 +1265,39 @@ describe('DeckColumn playback mode (M19)', () => {
   it('announces the explicit end-of-track state', () => {
     renderPlayback(aTrack({ position: 125, ended: true }))
     expect(screen.getByText('Track — ended')).toBeInTheDocument()
+  })
+
+  it('rides the tempo knob and shows the effective BPM (M20)', () => {
+    const onSetTrackRate = vi.fn()
+    renderPlayback(aTrack({ rate: 1.05 }), {
+      onSetTrackRate: onSetTrackRate as unknown as () => void,
+    })
+    // The readout is bpm × rate — SYNC must visibly do something.
+    const stat = screen.getByText('BPM').parentElement!
+    expect(stat).toHaveTextContent((132.5 * 1.05).toFixed(1))
+    fireEvent.change(screen.getByLabelText('Tempo'), {
+      target: { value: '1.02' },
+    })
+    expect(onSetTrackRate).toHaveBeenCalledWith(1.02)
+  })
+
+  it('SYNC names its refusal reason', () => {
+    const onSyncTrack = vi.fn(() => 'out_of_range' as const)
+    renderPlayback(aTrack(), {
+      onSyncTrack: onSyncTrack as unknown as () => void,
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sync' }))
+    expect(onSyncTrack).toHaveBeenCalled()
+    expect(
+      screen.getByText('Sync refused — tempo out of range'),
+    ).toBeInTheDocument()
+
+    // A missing target is its own message — never the wrong blame.
+    onSyncTrack.mockReturnValue('no_tempo' as never)
+    fireEvent.click(screen.getByRole('button', { name: 'Sync' }))
+    expect(
+      screen.getByText('Sync refused — no tempo to sync to'),
+    ).toBeInTheDocument()
   })
 
   it('carries its own exit back to the live stream', () => {

@@ -14,9 +14,9 @@ import { Stat } from '../ui/Stat'
 import { TextField } from '../ui/TextField'
 import { TrackOverview, TRACK_OVERVIEW_BUCKETS } from '../ui/TrackOverview'
 import { TransportButton } from '../ui/TransportButton'
-import { WaveformStrip } from '../ui/WaveformStrip'
 import { XYPad } from '../ui/XYPad'
 import { isDeckOperable, type ActiveStyle, type DeckState } from './deckState'
+import { TRACK_RATE_RANGE } from '../audio/track'
 import { padWeights, spawnPosition, sweepPosition, type PadPoint } from './padWeights'
 import {
   MAX_PRESET_NAME_LENGTH,
@@ -28,6 +28,7 @@ import {
   type DeckMode,
   type GenerateEngine,
   type LoopState,
+  type SyncResult,
   type TrackState,
 } from './useDeck'
 import { loadDeckSettings, updateDeckSettings } from '../persistence'
@@ -80,7 +81,6 @@ function formatTrackTime(seconds: number): string {
 type DeckColumnProps = {
   deckId: DeckId
   state: DeckState
-  getWaveformRange: () => [number, number]
   onPlay: () => void
   onStop: () => void
   onSetStyle: (style: ActiveStyle) => void
@@ -121,6 +121,10 @@ type DeckColumnProps = {
    * without a trip to the Media Explorer. */
   onLeavePlayback: () => void
   onSeekTrack: (seconds: number) => void
+  /** Varispeed (M20): the tempo knob's rate, clamped upstream. */
+  onSetTrackRate: (rate: number) => void
+  /** SYNC: match the other deck's tempo; refusals name their reason. */
+  onSyncTrack: () => SyncResult
   getTrackPeaks: (
     buckets: number,
   ) => { min: Float32Array; max: Float32Array } | null
@@ -129,7 +133,6 @@ type DeckColumnProps = {
 export function DeckColumn({
   deckId,
   state,
-  getWaveformRange,
   onPlay,
   onStop,
   onSetStyle,
@@ -154,6 +157,8 @@ export function DeckColumn({
   track,
   onLeavePlayback,
   onSeekTrack,
+  onSetTrackRate,
+  onSyncTrack,
   getTrackPeaks,
 }: DeckColumnProps) {
   const { t } = useTranslation()
@@ -165,6 +170,12 @@ export function DeckColumn({
   // Generated pads (M18): the prompt, engine, and behaviour for the
   // next generation.
   const [generateDraft, setGenerateDraft] = useState('')
+  // SYNC's honest refusal (M20), keyed to the load so a stale verdict
+  // never haunts the next track's panel.
+  const [syncRefusal, setSyncRefusal] = useState<{
+    loadId: number
+    reason: Exclude<SyncResult, 'synced'>
+  } | null>(null)
   const [generateEngine, setGenerateEngine] = useState<GenerateEngine>('sfx')
   const [generateOneShot, setGenerateOneShot] = useState(true)
   // Mirrors the latest committed targets for reads after an await —
@@ -489,12 +500,6 @@ export function DeckColumn({
       className={`deck deck--${deckId}`}
       aria-label={t('deck.title', { id: deckId })}
     >
-      <WaveformStrip
-        label={t('deck.waveform', { id: deckId })}
-        getRange={getWaveformRange}
-        traceToken={`--color-deck-${deckId}`}
-      />
-
       <header className="deck__header">
         <h2 className="deck__title">{t('deck.title', { id: deckId })}</h2>
         <span
@@ -529,6 +534,7 @@ export function DeckColumn({
             peaks={trackPeaksData}
             position={track.position}
             duration={track.duration}
+            grid={track.grid}
             accent={deckId}
             onSeek={onSeekTrack}
           />
@@ -538,6 +544,42 @@ export function DeckColumn({
               {t('deck.track.backToLive')}
             </Button>
           </div>
+          {/* Beat-matching controls (M20, ADR-0014): varispeed and
+              tempo SYNC; phase stays the performer's via the jog. */}
+          <div className="deck__track-row">
+            <Knob
+              label={t('deck.track.tempo')}
+              accent={deckId}
+              value={track.rate}
+              min={1 - TRACK_RATE_RANGE}
+              max={1 + TRACK_RATE_RANGE}
+              step={0.001}
+              resetValue={1}
+              onChange={onSetTrackRate}
+            />
+            <Button
+              disabled={track.bpm === null}
+              onClick={() => {
+                const result = onSyncTrack()
+                setSyncRefusal(
+                  result === 'synced'
+                    ? null
+                    : { loadId: track.loadId, reason: result },
+                )
+              }}
+            >
+              {t('deck.track.sync')}
+            </Button>
+          </div>
+          {syncRefusal && syncRefusal.loadId === track.loadId && (
+            <p className="deck__error" role="alert">
+              {t(
+                syncRefusal.reason === 'no_tempo'
+                  ? 'deck.track.syncNoTempo'
+                  : 'deck.track.syncOutOfRange',
+              )}
+            </p>
+          )}
         </Panel>
       ) : (
       <Panel className="deck__style">
@@ -838,7 +880,7 @@ export function DeckColumn({
               value={
                 track.bpm === null
                   ? t('deck.health.noData')
-                  : track.bpm.toFixed(1)
+                  : (track.bpm * track.rate).toFixed(1)
               }
             />
           </div>

@@ -19,16 +19,20 @@ import { useMidi } from './control/useMidi'
 import { MediaExplorer } from './media/MediaExplorer'
 import { DeckColumn } from './deck/DeckColumn'
 import { useDeck } from './deck/useDeck'
+import { BeatView } from './mixer/BeatView'
 import { MixerStrip, type ChannelControls } from './mixer/MixerStrip'
+import { Select } from './ui/Select'
 import {
   deletePreset,
   loadAppSettings,
   loadPresets,
   updateAppSettings,
   upsertPresets,
+  type BeatViewLayout,
 } from './persistence'
 import type { StylePreset } from './presets'
 import { combinedRamWarning } from './ramWarning'
+import { phaseOffsetBeats } from './audio/track'
 import { handleShortcutKey } from './shortcuts'
 
 function App() {
@@ -45,6 +49,14 @@ function App() {
   const [cueDevice, setCueDevice] = useState<AudioOutputDevice | null>(
     () => loadAppSettings().cueDevice ?? null,
   )
+  // The beat view's home (M22): centre stacked, top bar, or off.
+  const [beatView, setBeatView] = useState<BeatViewLayout>(
+    () => loadAppSettings().beatView ?? 'center',
+  )
+  const handleBeatView = useCallback((layout: BeatViewLayout) => {
+    setBeatView(layout)
+    updateAppSettings({ beatView: layout })
+  }, [])
 
   // A live backend cue stream's stop function (ADR-0007); null while the
   // cue rides a browser sink or is off. The token guards the async hops:
@@ -222,6 +234,40 @@ function App() {
     [deckA, deckB],
   )
 
+  // Beat-matching (M20, ADR-0014): SYNC matches a track deck to the
+  // other deck's effective tempo — gated stream BPM, or grid BPM ×
+  // rate when the other side is a track too. Phase is read for the
+  // meter from whichever clock each deck honestly has.
+  const effectiveBpm = useCallback(
+    (deck: typeof deckA) =>
+      deck.mode === 'playback'
+        ? deck.track?.bpm != null
+          ? deck.track.bpm * deck.track.rate
+          : null
+        : deck.bpm,
+    [],
+  )
+  const handleSyncA = useCallback(
+    () => deckA.syncTrack(effectiveBpm(deckB)),
+    [deckA, deckB, effectiveBpm],
+  )
+  const handleSyncB = useCallback(
+    () => deckB.syncTrack(effectiveBpm(deckA)),
+    [deckA, deckB, effectiveBpm],
+  )
+  const getPhaseOffset = useCallback(() => {
+    const aPlayback = deckA.mode === 'playback'
+    const bPlayback = deckB.mode === 'playback'
+    if (!aPlayback && !bPlayback) return null
+    const clockOf = (deck: typeof deckA) =>
+      deck.mode === 'playback' ? deck.getTrackBeat() : deck.getLiveBeat()
+    const a = clockOf(deckA)
+    const b = clockOf(deckB)
+    if (!a || !b) return null
+    // The track side reads against the other deck; A wins ties.
+    return aPlayback ? phaseOffsetBeats(a, b) : phaseOffsetBeats(b, a)
+  }, [deckA, deckB])
+
   const midi = useMidi()
   const {
     status: midiStatus,
@@ -342,6 +388,17 @@ function App() {
           </p>
         )}
         <p className="app__hint">{t('app.shortcutsHint')}</p>
+        <div className="app__beatview-switch">
+          <Select
+            label={t('beatview.layout')}
+            value={beatView}
+            options={(['center', 'vertical', 'top', 'off'] as const).map((layout) => ({
+              value: layout,
+              label: t(`beatview.layouts.${layout}`),
+            }))}
+            onChange={(value) => handleBeatView(value as BeatViewLayout)}
+          />
+        </div>
         <MidiControls
           status={midi.status}
           deviceName={midi.deviceName}
@@ -349,11 +406,16 @@ function App() {
           readMonitor={midi.readMonitor}
         />
       </header>
+      {beatView === 'top' && (
+        <BeatView
+          getSourceA={deckA.getZoomSource}
+          getSourceB={deckB.getZoomSource}
+        />
+      )}
       <div className="app__booth">
         <DeckColumn
           deckId="a"
           state={deckA.state}
-          getWaveformRange={deckA.getChannelWaveformRange}
           onPlay={() => void deckA.play()}
           onStop={deckA.stop}
           onSetStyle={deckA.setStyle}
@@ -378,9 +440,18 @@ function App() {
           track={deckA.track}
           onLeavePlayback={deckA.leavePlayback}
           onSeekTrack={deckA.seekTrack}
+          onSetTrackRate={deckA.setTrackRate}
+          onSyncTrack={handleSyncA}
           getTrackPeaks={deckA.getTrackPeaks}
         />
         <div className="app__center">
+          {(beatView === 'center' || beatView === 'vertical') && (
+            <BeatView
+              vertical={beatView === 'vertical'}
+              getSourceA={deckA.getZoomSource}
+              getSourceB={deckB.getZoomSource}
+            />
+          )}
           <MixerStrip
             channels={channels}
             crossfade={crossfade}
@@ -389,12 +460,12 @@ function App() {
             onCueMixChange={handleCueMix}
             cueDevice={cueDevice}
             onCueDeviceChange={handleCueDevice}
+            getPhaseOffset={getPhaseOffset}
           />
         </div>
         <DeckColumn
           deckId="b"
           state={deckB.state}
-          getWaveformRange={deckB.getChannelWaveformRange}
           onPlay={() => void deckB.play()}
           onStop={deckB.stop}
           onSetStyle={deckB.setStyle}
@@ -419,6 +490,8 @@ function App() {
           track={deckB.track}
           onLeavePlayback={deckB.leavePlayback}
           onSeekTrack={deckB.seekTrack}
+          onSetTrackRate={deckB.setTrackRate}
+          onSyncTrack={handleSyncB}
           getTrackPeaks={deckB.getTrackPeaks}
         />
       </div>

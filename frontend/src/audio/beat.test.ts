@@ -7,7 +7,11 @@ import {
   trackBpm,
   type BeatEstimate,
 } from './beat'
-import { clickTrack as sharedClickTrack, noiseSource } from '../test/clickTrack'
+import {
+  clickTrack as sharedClickTrack,
+  kickHatTrack,
+  noiseSource,
+} from '../test/clickTrack'
 
 const SAMPLE_RATE = 48_000
 const CHUNK_FRAMES = 1920 // the deck wire chunk: 40 ms
@@ -222,5 +226,47 @@ describe('trackBpm', () => {
     const bpm = trackBpm(paddedLeft, paddedRight, SAMPLE_RATE)
     expect(bpm).not.toBeNull()
     expect(Math.abs(bpm! - 128)).toBeLessThanOrEqual(128 * 0.05)
+  })
+})
+
+describe('beat anchor (M20)', () => {
+  it('anchors the most recent beat on the click lattice', () => {
+    const tracker = createBeatTracker(SAMPLE_RATE)
+    feed(tracker, clickTrack(128, 16))
+    const estimate = tracker.estimate()!
+    expect(estimate.anchorFrame).toBeDefined()
+    const periodFrames = (60 / 128) * SAMPLE_RATE
+    // Clicks land on period multiples from stream start.
+    const phase = (estimate.anchorFrame! % periodFrames) / periodFrames
+    expect(Math.min(phase, 1 - phase)).toBeLessThanOrEqual(0.12)
+    // And the anchor is recent — the fold tracks now, not the window
+    // average.
+    expect(estimate.anchorFrame!).toBeGreaterThan(
+      16 * SAMPLE_RATE - 3 * periodFrames,
+    )
+    expect(estimate.anchorFrame!).toBeLessThanOrEqual(16 * SAMPLE_RATE)
+  })
+
+  it('anchors on the kicks through offbeat hats (M20)', () => {
+    const tracker = createBeatTracker(SAMPLE_RATE)
+    feed(tracker, kickHatTrack(128, 16, SAMPLE_RATE))
+    const estimate = tracker.estimate()!
+    expect(estimate.anchorFrame).toBeDefined()
+    const periodFrames = (60 / 128) * SAMPLE_RATE
+    const phase = (estimate.anchorFrame! % periodFrames) / periodFrames
+    // On the kick lattice — not half a period off on the louder hats.
+    expect(Math.min(phase, 1 - phase)).toBeLessThanOrEqual(0.12)
+  })
+
+  it('withholds the anchor when the fold is incoherent', () => {
+    const tracker = createBeatTracker(SAMPLE_RATE)
+    const noise = noiseSource(11)
+    const samples = new Float32Array(SAMPLE_RATE * 2 * 16)
+    for (let i = 0; i < samples.length; i++) samples[i] = noise() * 0.4
+    feed(tracker, samples)
+    const estimate = tracker.estimate()
+    if (estimate !== null) {
+      expect(estimate.anchorFrame).toBeUndefined()
+    }
   })
 })

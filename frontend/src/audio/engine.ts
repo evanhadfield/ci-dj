@@ -20,7 +20,7 @@
 import { EQ_BANDS, EQ_FILTERS, eqValueToDb, type EqBand } from './eq'
 import { fxBlend, isFxActive, type FxKind } from './fx'
 import { buildFxGraph, type FxGraph } from './fxGraphs'
-import { rangeFromBytes, rmsFromBytes } from './levels'
+import { rmsFromBytes } from './levels'
 import {
   buildLoopChannel,
   LOOP_CROSSFADE_SECONDS,
@@ -38,7 +38,16 @@ import {
   LIMITER_THRESHOLD_DB,
 } from './master'
 import { interleaveChannels, MIN_STYLE_SAMPLE_SECONDS } from './styleSample'
-import { clampOffset, positionAt, trackPeaks, type TrackTransport } from './track'
+import {
+  bendConsumed,
+  bendPlan,
+  clampOffset,
+  clampRate,
+  MAX_PENDING_SLIP_SECONDS,
+  positionAt,
+  trackPeaks,
+  type TrackTransport,
+} from './track'
 import { encodeWav, floatToInt16 } from './wav'
 
 export type DeckId = 'a' | 'b'
@@ -107,13 +116,24 @@ export type DeckChannel = {
   /** Jump the playhead; whether it was playing is preserved. */
   seekTrack: (seconds: number) => void
   /** Playhead snapshot, or null with no track loaded. The end is an
-   * explicit state: silence with the position parked (ADR-0013). */
+   * explicit state: silence with the position parked (ADR-0013).
+   * `rate` is the base varispeed rate (M20), bends excluded. */
   getTrackStatus: () => {
     position: number
     duration: number
     playing: boolean
     ended: boolean
+    rate: number
+    /** Context time of this snapshot — lets callers convert the
+     * track-domain playhead into the shared audio clock (M20). */
+    contextTime: number
   } | null
+  /** Varispeed (M20, ADR-0014): the playback rate the tempo control
+   * set; the transport re-anchors so the playhead stays exact. */
+  setTrackRate: (rate: number) => void
+  /** Phase nudge: slip the playhead by `seconds` via a stepped rate
+   * bend (the platter-drag metaphor) — never a click. Playing only. */
+  nudgeTrackPhase: (seconds: number) => void
   /** Static min/max envelope of the loaded track for the overview. */
   getTrackPeaks: (
     buckets: number,
@@ -122,8 +142,6 @@ export type DeckChannel = {
   unloadTrack: () => void
   /** Post-fader RMS level, 0..~1 (for channel meters). */
   getLevel: () => number
-  /** Min/max of the latest audio window, -1..1 (for waveform strips). */
-  getWaveformRange: () => [number, number]
   dispose: () => void
 }
 
@@ -131,9 +149,17 @@ export type StatsHandler = (stats: {
   underruns: number
   bufferedSeconds: number
   playing: boolean
+  /** Cumulative frames consumed since the last reset, and the
+   * worklet clock at snapshot time — the played-index anchor the
+   * beat clock extrapolates from (M20, ADR-0014). */
+  playedFrames: number
+  contextTime: number
 }) => void
 
 export type AudioEngine = {
+  /** The shared context clock, or null before the bus exists — the
+   * zoom view extrapolates played positions in this domain (M22). */
+  getContextTime: () => number | null
   createDeckChannel: (
     deckId: DeckId,
     initial: {
@@ -233,6 +259,9 @@ type Recorder = {
 
 export function createAudioEngine(): AudioEngine {
   let busPromise: Promise<Bus> | null = null
+  // The raw context handle for synchronous clock reads (M22); set the
+  // moment the bus builds, null before.
+  let liveContext: AudioContext | null = null
   let crossfadePosition = INITIAL_CROSSFADE
   let cueMixPosition = INITIAL_CUE_MIX
   // The cue feed's second sink (ADR-0006): an audio element carrying the
@@ -249,6 +278,7 @@ export function createAudioEngine(): AudioEngine {
 
   async function buildBus(): Promise<Bus> {
     const context = new AudioContext({ sampleRate: SAMPLE_RATE })
+    liveContext = context
     try {
       await context.audioWorklet.addModule('/player-worklet.js')
       const master = context.createGain()
@@ -316,6 +346,9 @@ export function createAudioEngine(): AudioEngine {
         cueOut,
       }
     } catch (error) {
+      // A closed context's clock freezes — don't let getContextTime
+      // keep reporting it.
+      liveContext = null
       void context.close()
       throw error
     }
@@ -341,6 +374,9 @@ export function createAudioEngine(): AudioEngine {
   }
 
   return {
+    getContextTime() {
+      return liveContext?.currentTime ?? null
+    },
     async createDeckChannel(deckId, initial, onStats) {
       const bus = await ensureBus()
       const worklet = new AudioWorkletNode(bus.context, 'pcm-player', {
@@ -492,7 +528,71 @@ export function createAudioEngine(): AudioEngine {
       let trackBuffer: AudioBuffer | null = null
       let trackSource: AudioBufferSourceNode | null = null
       let trackTransport: TrackTransport = { state: 'paused', offset: 0 }
+      // Varispeed (M20, ADR-0014): the base rate the tempo control
+      // sets, plus one stepped bend at a time for phase nudges. The
+      // transport re-anchors on every rate change, so positionAt
+      // stays exact even mid-bend.
+      let trackRate = 1
+      let pendingSlip = 0
+      // Below this the slip is done: half a millisecond is under any
+      // audible phase resolution and ends the bend recursion.
+      const SLIP_SETTLED_SECONDS = 5e-4
+      let bentRate: number | null = null
+      let bendStartedAt = 0
+      let bendTimer: ReturnType<typeof setTimeout> | null = null
+      function setSourceRate(rate: number) {
+        const now = bus.context.currentTime
+        if (trackTransport.state === 'playing' && trackBuffer) {
+          trackTransport = {
+            state: 'playing',
+            offset: positionAt(trackTransport, now, trackBuffer.duration),
+            startedAt: now,
+            rate,
+          }
+        }
+        if (trackSource) trackSource.playbackRate.value = rate
+      }
+      function clearBendState() {
+        if (bendTimer) {
+          clearTimeout(bendTimer)
+          bendTimer = null
+        }
+        pendingSlip = 0
+        bentRate = null
+      }
+      function applyBend() {
+        const now = bus.context.currentTime
+        if (bendTimer) {
+          clearTimeout(bendTimer)
+          bendTimer = null
+        }
+        // Settle what an interrupted bend already slipped before
+        // planning the remainder.
+        if (bentRate !== null) {
+          pendingSlip -= bendConsumed(now - bendStartedAt, trackRate, bentRate)
+          bentRate = null
+        }
+        if (
+          trackTransport.state !== 'playing' ||
+          Math.abs(pendingSlip) < SLIP_SETTLED_SECONDS
+        ) {
+          pendingSlip = 0
+          setSourceRate(trackRate)
+          return
+        }
+        const plan = bendPlan(pendingSlip, trackRate)
+        bentRate = plan.rate
+        bendStartedAt = now
+        setSourceRate(plan.rate)
+        // setTimeout jitter is harmless: at a 5% bend, ±20ms of timer
+        // error is ±1ms of slip, and the settle above keeps the books.
+        bendTimer = setTimeout(() => {
+          bendTimer = null
+          applyBend()
+        }, plan.durationSeconds * 1000)
+      }
       function stopTrackSource() {
+        clearBendState()
         const source = trackSource
         if (!source) return
         trackSource = null
@@ -506,6 +606,8 @@ export function createAudioEngine(): AudioEngine {
         if (!buffer) return
         const source = bus.context.createBufferSource()
         source.buffer = buffer
+        // Rate carries over across pause/seek/source restarts.
+        source.playbackRate.value = trackRate
         source.connect(liveGain)
         source.onended = () => {
           source.disconnect()
@@ -520,6 +622,7 @@ export function createAudioEngine(): AudioEngine {
           state: 'playing',
           offset,
           startedAt: bus.context.currentTime,
+          rate: trackRate,
         }
       }
 
@@ -766,7 +869,29 @@ export function createAudioEngine(): AudioEngine {
             duration: trackBuffer.duration,
             playing: trackTransport.state === 'playing',
             ended: trackTransport.state === 'ended',
+            // The base rate the tempo control set — a transient nudge
+            // bend deliberately doesn't show here.
+            rate: trackRate,
+            contextTime: bus.context.currentTime,
           }
+        },
+        setTrackRate(rate) {
+          if (!Number.isFinite(rate) || rate <= 0) return
+          clearBendState()
+          // Callers clamp upstream; the engine boundary holds the
+          // envelope anyway rather than trusting them.
+          trackRate = clampRate(rate)
+          setSourceRate(trackRate)
+        },
+        nudgeTrackPhase(seconds) {
+          if (trackTransport.state !== 'playing') return
+          // The backlog caps: a hard spin should answer now, not keep
+          // bending for seconds after the hand leaves the platter.
+          pendingSlip = Math.min(
+            MAX_PENDING_SLIP_SECONDS,
+            Math.max(-MAX_PENDING_SLIP_SECONDS, pendingSlip + seconds),
+          )
+          applyBend()
         },
         getTrackPeaks(buckets) {
           if (!trackBuffer) return null
@@ -780,13 +905,10 @@ export function createAudioEngine(): AudioEngine {
           stopTrackSource()
           trackBuffer = null
           trackTransport = { state: 'paused', offset: 0 }
+          trackRate = 1
         },
         getLevel() {
           return rmsLevel(analyser, analyserBuffer)
-        },
-        getWaveformRange() {
-          analyser.getByteTimeDomainData(analyserBuffer)
-          return rangeFromBytes(analyserBuffer)
         },
         dispose() {
           worklet.port.onmessage = null

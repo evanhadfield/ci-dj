@@ -273,6 +273,52 @@
   opacity: 0.4;
 }
 
+/* ---------- phase meter (M20) ---------- */
+
+.ui-phasemeter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ui-phasemeter__label {
+  font: var(--silkscreen);
+  letter-spacing: var(--silkscreen-spacing);
+  text-transform: uppercase;
+  color: var(--color-text-silkscreen);
+}
+
+.ui-phasemeter__track {
+  position: relative;
+  height: var(--space-2);
+  border-radius: var(--radius-s);
+  background: var(--color-surface-inset);
+  box-shadow: var(--inset-border);
+}
+
+.ui-phasemeter__centre {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-text-muted);
+}
+
+.ui-phasemeter__needle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: 1px;
+  background: var(--color-led-ok);
+}
+
+.ui-phasemeter--blank .ui-phasemeter__track {
+  opacity: 0.4;
+}
+
 /* ---------- level meter ---------- */
 
 .ui-levelmeter {
@@ -302,17 +348,6 @@
 
 .ui-levelmeter__segment--on.ui-levelmeter__segment--danger {
   background: var(--color-led-danger);
-}
-
-/* ---------- waveform strip ---------- */
-
-.ui-waveform {
-  width: 100%;
-  height: 3.5rem;
-  display: block;
-  background: var(--color-surface-inset);
-  border-radius: var(--radius-s);
-  box-shadow: var(--inset-border);
 }
 
 /* ---------- track overview (playback deck) ---------- */
@@ -519,4 +554,21 @@
   letter-spacing: var(--silkscreen-spacing);
   text-transform: uppercase;
   color: var(--color-text-silkscreen);
+}
+
+/* ---------- zoom strip (M22 beat view) ---------- */
+
+.ui-zoomstrip {
+  width: 100%;
+  height: 5.5rem;
+  display: block;
+  background: var(--color-surface-inset);
+  border-radius: var(--radius-s);
+  box-shadow: var(--inset-border);
+}
+
+/* Vertical close-up: the canvas swaps its axes (time downward). */
+.ui-zoomstrip--vertical {
+  width: 5.5rem;
+  height: 45rem;
 }

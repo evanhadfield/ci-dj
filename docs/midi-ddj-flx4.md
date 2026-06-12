@@ -38,7 +38,6 @@ sends it on every device bind so a fresh connection starts in sync.
 
 | Control | Message | Why |
 | ------- | ------- | --- |
-| Tempo sliders | `0xB0`/`0xB1` CC `0x00` range | no tempo parameter (ADR-0004) |
 | TRIM, BEAT SYNC, loop section | various | no app counterpart yet (CUE went in M10, browse/load in M16) |
 
 ## Mapped in M10 (headphone cue)
@@ -67,11 +66,13 @@ remains the verification tool.
 | LOAD deck 1 / 2 | `0x96` notes `0x46`/`0x47` | load the highlighted item onto that deck (`browse_load`): a crate flips the deck to realtime, a track to playback (ADR-0013) |
 | Browse rotary (press) | `0x96` note `0x41` | cycle the Media Explorer's visible tab (`browse_tab`, M19). The Mixxx FLX4 chart defines no press control; the byte is interpolated from the DDJ-400 family — confirm with the monitor |
 
-## Mapped in M19 (playback deck)
+## Mapped in M19 (playback deck), grown in M20 (beat-matching)
 
 | Control | Message | → App intent |
 | ------- | ------- | ------------ |
-| Jog wheel (turn) deck 1 / 2 | `0xB0`/`0xB1` CC `0x21` (platter) / `0x22` (rim), relative around `0x40` (`0x41` = +1 CW) | relative seek on a playback deck (`track_seek`); a realtime deck ignores the ticks — no scratch concept on the stream (ADR-0004). Encoding from the Mixxx chart; confirm with the monitor |
+| Jog wheel (turn) deck 1 / 2 | `0xB0`/`0xB1` CC `0x21` (side) / `0x22` (platter, vinyl on) / `0x23` (platter, vinyl off), relative around `0x40` (`0x41` = +1 CW) | the platter's dual role on a playback deck: paused = fine relative seek, playing = phase nudge; a realtime deck ignores the ticks — no scratch concept on the stream (ADR-0004) |
+| SHIFT + jog (turn) deck 1 / 2 | `0xB0`/`0xB1` CC `0x29` (`jogSearch` in the Mixxx FLX4 chart, **confirmed on the device** — third run: "Shift+jog works while playing"), relative around `0x40` | fast scrub even mid-play (the CDJ search convention). The firmware moves the shifted jog to its **own CC** — the software soft-shift on `0x21`/`0x22` shipped first and read as "scrubbing does nothing" on the device |
+| Tempo slider deck 1 / 2 | `0xB0`/`0xB1` CC `0x00` (LSB `0x20`) | varispeed on a playback deck (`track_rate`, M20, ADR-0014 — playback rate is not generation tempo, so ADR-0004 stands); realtime decks ignore it. Orientation **measured on the device**: low values = slow end (the chart assumption shipped inverted and was caught on hardware) |
 
 Reinterpreted, no new bytes: on a deck in playback mode the existing
 transport messages drive the track instead of the worker — PLAY/PAUSE

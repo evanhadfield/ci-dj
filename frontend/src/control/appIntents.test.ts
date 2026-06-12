@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { initialDeckState, type DeckState } from '../deck/deckState'
 import type { DeckControls } from '../deck/useDeck'
-import { applyAppIntent, JOG_SEEK_SECONDS } from './appIntents'
+import {
+  applyAppIntent,
+  JOG_NUDGE_SECONDS,
+  JOG_SCRUB_SECONDS,
+  JOG_SEEK_SECONDS,
+} from './appIntents'
 
 function fakeDeck(state: Partial<DeckState> = {}): DeckControls {
   return {
@@ -32,6 +37,12 @@ function fakeDeck(state: Partial<DeckState> = {}): DeckControls {
     leavePlayback: vi.fn(),
     seekTrack: vi.fn(),
     nudgeTrack: vi.fn(),
+    setTrackRate: vi.fn(),
+    nudgeTrackPhase: vi.fn(),
+    syncTrack: vi.fn(() => 'synced' as const),
+    getTrackBeat: vi.fn(() => null),
+    getLiveBeat: vi.fn(() => null),
+    getZoomSource: vi.fn(() => null),
     getTrackPeaks: vi.fn(() => null),
     trim: { mode: 'auto' as const, db: 0 },
     setTrimDb: vi.fn(),
@@ -46,7 +57,6 @@ function fakeDeck(state: Partial<DeckState> = {}): DeckControls {
     setVolume: vi.fn(),
     setEqBand: vi.fn(),
     getChannelLevel: () => 0,
-    getChannelWaveformRange: () => [0, 0],
   }
 }
 
@@ -231,6 +241,8 @@ describe('applyAppIntent', () => {
         playing,
         ended: false,
         bpm: null,
+        grid: null,
+        rate: 1,
       },
     }
   }
@@ -256,20 +268,63 @@ describe('applyAppIntent', () => {
     expect(playing.stop).not.toHaveBeenCalled()
   })
 
-  it('jog ticks seek a playback deck, scaled to seconds', () => {
-    const deck = playbackDeck(true)
+  it('jog ticks seek a parked track, scaled to seconds', () => {
+    const deck = playbackDeck(false)
     applyAppIntent(
-      { kind: 'track_seek', deck: 'a', steps: 3 },
+      { kind: 'track_seek', deck: 'a', steps: 3, shifted: false },
       decks(deck),
       noHandlers,
     )
     expect(deck.nudgeTrack).toHaveBeenCalledWith(3 * JOG_SEEK_SECONDS)
+    expect(deck.nudgeTrackPhase).not.toHaveBeenCalled()
+  })
+
+  it('jog ticks nudge phase while the track plays — the platter dual role (M20)', () => {
+    const deck = playbackDeck(true)
+    applyAppIntent(
+      { kind: 'track_seek', deck: 'a', steps: -2, shifted: false },
+      decks(deck),
+      noHandlers,
+    )
+    expect(deck.nudgeTrackPhase).toHaveBeenCalledWith(-2 * JOG_NUDGE_SECONDS)
+    expect(deck.nudgeTrack).not.toHaveBeenCalled()
+  })
+
+  it('SHIFT+jog fast-scrubs even while playing — the CDJ search convention', () => {
+    const deck = playbackDeck(true)
+    applyAppIntent(
+      { kind: 'track_seek', deck: 'a', steps: 3, shifted: true },
+      decks(deck),
+      noHandlers,
+    )
+    expect(deck.nudgeTrack).toHaveBeenCalledWith(3 * JOG_SCRUB_SECONDS)
+    expect(deck.nudgeTrackPhase).not.toHaveBeenCalled()
+  })
+
+  it('tempo slider rides the rate on a playback deck only (M20)', () => {
+    const deck = playbackDeck(true)
+    applyAppIntent(
+      { kind: 'track_rate', deck: 'a', value: 0 },
+      decks(deck),
+      noHandlers,
+    )
+    // Low MIDI values are the slow end — orientation measured on the
+    // device after the chart assumption shipped inverted.
+    expect(deck.setTrackRate).toHaveBeenCalledWith(0.92)
+
+    const live = fakeDeck({ playing: true })
+    applyAppIntent(
+      { kind: 'track_rate', deck: 'a', value: 0 },
+      decks(live),
+      noHandlers,
+    )
+    expect(live.setTrackRate).not.toHaveBeenCalled()
   })
 
   it('a realtime deck ignores jog ticks — still no scratch concept', () => {
     const deck = fakeDeck({ playing: true })
     applyAppIntent(
-      { kind: 'track_seek', deck: 'a', steps: 3 },
+      { kind: 'track_seek', deck: 'a', steps: 3, shifted: false },
       decks(deck),
       noHandlers,
     )

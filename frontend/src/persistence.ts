@@ -23,10 +23,16 @@ export type DeckSettings = {
   trim: { mode: 'auto' | 'manual'; db: number }
 }
 
+/** Where the beat view lives (M22): centre stacked, centre vertical
+ * (time runs downward, the Serato convention), full-width top bar,
+ * or off. */
+export type BeatViewLayout = 'center' | 'vertical' | 'top' | 'off'
+
 export type AppSettings = {
   crossfade: number
   cueMix: number
   cueDevice: AudioOutputDevice | null
+  beatView: BeatViewLayout
 }
 
 const STORAGE_KEY = 'magenta-dj:v1'
@@ -139,6 +145,14 @@ export function loadAppSettings(): Partial<AppSettings> {
   }
   if (Number.isFinite(stored.cueMix)) {
     settings.cueMix = clamp01(stored.cueMix as number)
+  }
+  if (
+    stored.beatView === 'center' ||
+    stored.beatView === 'vertical' ||
+    stored.beatView === 'top' ||
+    stored.beatView === 'off'
+  ) {
+    settings.beatView = stored.beatView
   }
   const cueDevice = stored.cueDevice
   if (cueDevice === null) {
