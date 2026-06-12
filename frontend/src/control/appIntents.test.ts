@@ -31,6 +31,7 @@ function fakeDeck(state: Partial<DeckState> = {}): DeckControls {
     loadTrack: vi.fn(async () => true),
     leavePlayback: vi.fn(),
     seekTrack: vi.fn(),
+    getTrackPeaks: vi.fn(() => null),
     trim: { mode: 'auto' as const, db: 0 },
     setTrimDb: vi.fn(),
     enableAutoTrim: vi.fn(),

@@ -130,7 +130,15 @@
       "disconnected": "Disconnected — retrying",
       "loadingModel": "Loading model…",
       "primed": "Primed — off air",
-      "frozen": "Frozen — looping"
+      "frozen": "Frozen — looping",
+      "trackPlaying": "Track — playing",
+      "trackPaused": "Track — paused",
+      "trackEnded": "Track — ended"
+    },
+    "track": {
+      "title": "Track",
+      "overview": "Track overview {{id}}",
+      "time": "{{position}} / {{duration}}"
     },
     "health": {
       "buffer": "Buffer",
@@ -139,7 +147,8 @@
       "underruns": "Underruns",
       "generationSpeed": "Gen speed",
       "generationSpeedValue": "{{rtf}}×",
-      "noData": "—"
+      "noData": "—",
+      "position": "Position"
     },
     "error": {
       "message": "Deck error: {{message}}"

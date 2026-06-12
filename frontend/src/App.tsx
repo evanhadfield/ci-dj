@@ -360,6 +360,10 @@ function App() {
           onSampleOtherDeck={handleSampleForA}
           canSample={deckB.state.playing}
           onSavePreset={handleSavePreset}
+          mode={deckA.mode}
+          track={deckA.track}
+          onSeekTrack={deckA.seekTrack}
+          getTrackPeaks={deckA.getTrackPeaks}
         />
         <div className="app__center">
           <MixerStrip
@@ -402,6 +406,10 @@ function App() {
           onSampleOtherDeck={handleSampleForB}
           canSample={deckA.state.playing}
           onSavePreset={handleSavePreset}
+          mode={deckB.mode}
+          track={deckB.track}
+          onSeekTrack={deckB.seekTrack}
+          getTrackPeaks={deckB.getTrackPeaks}
         />
       </div>
     </main>

@@ -126,6 +126,10 @@ export type DeckControls = {
   /** Jump the track playhead (overview click / FLX4); playback-mode
    * only, a no-op on the live stream. */
   seekTrack: (seconds: number) => void
+  /** Static envelope of the loaded track for the overview strip. */
+  getTrackPeaks: (
+    buckets: number,
+  ) => { min: Float32Array; max: Float32Array } | null
   /** Generating but off air (M10): buffer fills, only the cue tap hears
    * it. play() then drops it on air without flushing what was built up.
    * On a playback deck, CUE instead returns the track to the top. */
@@ -507,6 +511,11 @@ export function useDeck(deckId: DeckId): DeckControls {
     resetStreamMeasurements()
   }, [setMode, resetStreamMeasurements])
 
+  const getTrackPeaks = useCallback(
+    (buckets: number) => channelRef.current?.getTrackPeaks(buckets) ?? null,
+    [],
+  )
+
   const seekTrack = useCallback((seconds: number) => {
     if (modeRef.current !== 'playback') return
     channelRef.current?.seekTrack(seconds)
@@ -839,6 +848,7 @@ export function useDeck(deckId: DeckId): DeckControls {
     loadTrack,
     leavePlayback,
     seekTrack,
+    getTrackPeaks,
     trim,
     setTrimDb,
     enableAutoTrim,
