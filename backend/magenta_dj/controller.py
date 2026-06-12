@@ -16,6 +16,7 @@ import multiprocessing as mp
 import os
 import pathlib
 import queue
+import time
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -66,15 +67,23 @@ class DeckProcess:
         # True while a restart is tearing down/spawning the worker, so the
         # pump doesn't misread the gap as a crash.
         self.restarting = False
+        # One clip render in flight per deck (M18): the worker is serial
+        # anyway; the lock keeps responses matched to requests.
+        self.render_lock = asyncio.Lock()
         self._spawn()
 
     def _spawn(self) -> None:
         ctx = mp.get_context("spawn")
         self.cmd_queue = ctx.Queue()
         self.out_queue = ctx.Queue(maxsize=OUT_QUEUE_CHUNKS * 2)
+        # Clip renders (M18) answer here, not on out_queue: a multi-second
+        # PCM result must never queue behind — or be drained with — the
+        # audio stream.
+        self.clip_queue = ctx.Queue()
         self.process = ctx.Process(
             target=run_deck_worker,
             args=(self.deck_id, self.model, self.cmd_queue, self.out_queue),
+            kwargs={"clip_queue": self.clip_queue},
             name=f"deck-{self.deck_id}",
             daemon=True,
         )
@@ -385,6 +394,101 @@ async def style_sample(deck_id: str, request: Request) -> dict:
         )
     deck.send({"type": "embed_sample", "id": sample_id, "pcm": body})
     return {"id": sample_id, "seconds": round(seconds, 2)}
+
+
+# Worst case: a 32 s clip at a pessimistic ~1× real time, plus a cold
+# prompt embed; well past it the worker is wedged, not slow.
+RENDER_TIMEOUT_SECONDS = 90
+
+
+def float32_wav(pcm: bytes, sample_rate: int, channels: int) -> bytes:
+    """Wrap wire-format PCM in a WAVE_FORMAT_IEEE_FLOAT header — what
+    decodeAudioData expects, with no quantisation on the way."""
+    byte_rate = sample_rate * channels * 4
+    header = b"RIFF" + (36 + len(pcm)).to_bytes(4, "little") + b"WAVEfmt "
+    header += (16).to_bytes(4, "little")
+    header += (3).to_bytes(2, "little")  # IEEE float
+    header += channels.to_bytes(2, "little")
+    header += sample_rate.to_bytes(4, "little")
+    header += byte_rate.to_bytes(4, "little")
+    header += (channels * 4).to_bytes(2, "little")  # block align
+    header += (32).to_bytes(2, "little")  # bits per sample
+    header += b"data" + len(pcm).to_bytes(4, "little")
+    return header + pcm
+
+
+@app.post("/api/deck/{deck_id}/render")
+async def render_clip(deck_id: str, request: Request) -> Response:
+    """Render a pad clip with the deck's own Magenta worker (M18).
+
+    Body: JSON {prompt, seconds}. The worker refuses while the deck is
+    playing (rendering would stall the stream's pacing); a stopped
+    deck's warm model renders faster than real time. Returns the clip
+    as a float32 WAV.
+    """
+    deck = decks.get(deck_id)
+    if deck is None:
+        raise HTTPException(status_code=404, detail=f"unknown deck {deck_id!r}")
+    if deck.restarting:
+        raise HTTPException(status_code=409, detail="deck is loading a model")
+    try:
+        parsed = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="body must be JSON") from None
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=422, detail="body must be a JSON object")
+    prompt = parsed.get("prompt")
+    if not (isinstance(prompt, str) and prompt.strip()):
+        raise HTTPException(
+            status_code=422, detail="'prompt' must be a non-empty string"
+        )
+    prompt = prompt.strip()
+    if len(prompt) > sa3.MAX_PROMPT_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"'prompt' must be at most {sa3.MAX_PROMPT_LENGTH} characters",
+        )
+    seconds = parsed.get("seconds")
+    if (
+        isinstance(seconds, bool)
+        or not isinstance(seconds, (int, float))
+        or not math.isfinite(seconds)
+        or not sa3.MIN_SECONDS <= seconds <= sa3.MAX_SECONDS
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=f"'seconds' must be {sa3.MIN_SECONDS}-{sa3.MAX_SECONDS}",
+        )
+    async with deck.render_lock:
+        # A previous timed-out render may have answered late; whatever
+        # sits in the queue belongs to nobody now.
+        with contextlib.suppress(queue.Empty):
+            while True:
+                deck.clip_queue.get_nowait()
+        request_id = f"clip-{deck_id}-{time.monotonic_ns()}"
+        deck.send(
+            {
+                "type": "render_clip",
+                "id": request_id,
+                "prompt": prompt,
+                "seconds": float(seconds),
+            }
+        )
+        try:
+            result_id, result = await asyncio.to_thread(
+                deck.clip_queue.get, True, RENDER_TIMEOUT_SECONDS
+            )
+        except queue.Empty:
+            raise HTTPException(status_code=502, detail="render timed out") from None
+    if result_id != request_id:
+        raise HTTPException(status_code=502, detail="render answered out of turn")
+    if "error" in result:
+        status = 409 if result["error"] == "deck is playing" else 502
+        raise HTTPException(status_code=status, detail=result["error"])
+    return Response(
+        content=float32_wav(result["pcm"], engine.SAMPLE_RATE, engine.CHANNELS),
+        media_type="audio/wav",
+    )
 
 
 @app.post("/api/generate")

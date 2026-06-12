@@ -20,9 +20,17 @@ class FakeEngine:
         self.styles = []
         self.style_sample_keys = []
         self.samples = []
+        self.renders = []
         self.fail_set_style = False
         self.fail_embed_sample = False
         self.fail_generate = False
+        self.fail_render = False
+
+    def render_clip(self, prompt, seconds):
+        if self.fail_render:
+            raise RuntimeError("render blew up")
+        self.renders.append((prompt, seconds))
+        return FAKE_PCM
 
     def set_style(self, prompts, sample_keys=frozenset()):
         if self.fail_set_style:
@@ -46,10 +54,14 @@ class DeckHarness:
         self.engine = FakeEngine()
         self.cmd_queue = queue.Queue()
         self.out_queue = queue.Queue()
+        self.clip_queue = queue.Queue()
         self.thread = threading.Thread(
             target=run_deck_worker,
             args=("test", "fake", self.cmd_queue, self.out_queue),
-            kwargs={"engine_factory": lambda model: self.engine},
+            kwargs={
+                "engine_factory": lambda model: self.engine,
+                "clip_queue": self.clip_queue,
+            },
             daemon=True,
         )
 
@@ -164,5 +176,33 @@ def test_generation_failure_stops_deck_but_worker_survives(deck):
     # The failure auto-stopped the deck; play must work again once the
     # engine recovers.
     deck.engine.fail_generate = False
+    deck.send(type="play")
+    assert deck.next_event("audio") == FAKE_PCM
+
+
+def test_render_clip_answers_on_the_clip_queue(deck):
+    deck.send(type="render_clip", id="clip-1", prompt="air horn", seconds=2.0)
+    result_id, result = deck.clip_queue.get(timeout=3.0)
+    assert result_id == "clip-1"
+    assert result == {"pcm": FAKE_PCM}
+    assert deck.engine.renders == [("air horn", 2.0)]
+
+
+def test_render_clip_refuses_while_playing(deck):
+    deck.send(type="play")
+    deck.next_event("audio")
+    deck.send(type="render_clip", id="clip-2", prompt="air horn", seconds=2.0)
+    result_id, result = deck.clip_queue.get(timeout=3.0)
+    assert result_id == "clip-2"
+    assert result == {"error": "deck is playing"}
+    assert deck.engine.renders == []
+
+
+def test_render_failure_answers_an_error_and_worker_survives(deck):
+    deck.engine.fail_render = True
+    deck.send(type="render_clip", id="clip-3", prompt="air horn", seconds=2.0)
+    _, result = deck.clip_queue.get(timeout=3.0)
+    assert result == {"error": "render failed"}
+
     deck.send(type="play")
     assert deck.next_event("audio") == FAKE_PCM

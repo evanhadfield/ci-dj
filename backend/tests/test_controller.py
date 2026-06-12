@@ -3,6 +3,7 @@ session cleanup. A fake deck stands in for the worker process; the lifespan
 (which spawns real model workers) is deliberately not entered.
 """
 
+import asyncio
 import queue
 import time
 
@@ -28,14 +29,21 @@ class FakeDeck:
         self.model = "mrt2_small"
         self.cmd_queue = queue.Queue()
         self.out_queue = queue.Queue()
+        self.clip_queue = queue.Queue()
+        self.render_lock = asyncio.Lock()
         self.process = FakeProcess()
         self.connected = False
         self.restarting = False
         self.stopped = False
         self.restarted_with = []
+        # The worker half of the render round-trip: a configured
+        # response answers any render_clip command immediately.
+        self.render_response = None
 
     def send(self, command):
         self.cmd_queue.put(command)
+        if command.get("type") == "render_clip" and self.render_response is not None:
+            self.clip_queue.put((command["id"], self.render_response))
 
     def drain(self):
         while not self.out_queue.empty():
@@ -465,3 +473,95 @@ def test_generate_maps_cli_failure_to_502(client, monkeypatch):
     response = client.post("/api/generate", json=generate_request())
     assert response.status_code == 502
     assert "no DiT weights" in response.json()["detail"]
+
+
+# --- /api/deck/{deck}/render (M18, Magenta as pad generator) --------------
+
+
+def test_float32_wav_wraps_the_pcm_exactly():
+    pcm = b"\x00\x00\x80\x3f" * 4  # four float32 ones
+    wav = controller.float32_wav(pcm, 48_000, 2)
+    assert wav[:4] == b"RIFF"
+    assert wav[8:16] == b"WAVEfmt "
+    assert int.from_bytes(wav[20:22], "little") == 3  # IEEE float
+    assert int.from_bytes(wav[22:24], "little") == 2
+    assert int.from_bytes(wav[24:28], "little") == 48_000
+    assert int.from_bytes(wav[40:44], "little") == len(pcm)
+    assert wav[44:] == pcm
+
+
+def test_render_returns_the_worker_clip_as_wav(client, deck):
+    deck.render_response = {"pcm": b"\x00" * 16}
+    response = client.post(
+        "/api/deck/a/render", json={"prompt": " air horn ", "seconds": 2.0}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content[44:] == b"\x00" * 16
+    command = deck.cmd_queue.get_nowait()
+    assert command["type"] == "render_clip"
+    assert command["prompt"] == "air horn"
+    assert command["seconds"] == 2.0
+
+
+def test_render_maps_a_playing_deck_to_409(client, deck):
+    deck.render_response = {"error": "deck is playing"}
+    response = client.post(
+        "/api/deck/a/render", json={"prompt": "air horn", "seconds": 2.0}
+    )
+    assert response.status_code == 409
+    assert "playing" in response.json()["detail"]
+
+
+def test_render_maps_worker_failure_to_502(client, deck):
+    deck.render_response = {"error": "render failed"}
+    response = client.post(
+        "/api/deck/a/render", json={"prompt": "air horn", "seconds": 2.0}
+    )
+    assert response.status_code == 502
+
+
+def test_render_discards_a_stale_answer_in_the_queue(client, deck):
+    # A timed-out render answered late; the next request must not be
+    # served someone else's clip.
+    deck.clip_queue.put(("clip-old", {"pcm": b"\xff" * 8}))
+    deck.render_response = {"pcm": b"\x00" * 8}
+    response = client.post(
+        "/api/deck/a/render", json={"prompt": "air horn", "seconds": 2.0}
+    )
+    assert response.status_code == 200
+    assert response.content[44:] == b"\x00" * 8
+
+
+def test_render_rejects_unknown_deck_and_restarting(client, deck):
+    assert (
+        client.post(
+            "/api/deck/zz/render", json={"prompt": "x", "seconds": 2.0}
+        ).status_code
+        == 404
+    )
+    deck.restarting = True
+    assert (
+        client.post(
+            "/api/deck/a/render", json={"prompt": "x", "seconds": 2.0}
+        ).status_code
+        == 409
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"prompt": "", "seconds": 2.0},
+        {"prompt": "x" * 501, "seconds": 2.0},
+        {"prompt": "x", "seconds": 0.1},
+        {"prompt": "x", "seconds": 33.0},
+        {"prompt": "x", "seconds": True},
+        "not an object",
+    ],
+)
+def test_render_validates_the_trust_boundary(client, deck, body):
+    deck.render_response = {"pcm": b"\x00" * 8}
+    response = client.post("/api/deck/a/render", json=body)
+    assert response.status_code == 422
+    assert deck.cmd_queue.empty()
