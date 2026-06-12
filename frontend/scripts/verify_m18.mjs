@@ -49,7 +49,7 @@ try {
   const underruns = (deck) =>
     deck.locator('.ui-stat', { hasText: 'Underruns' }).locator('.ui-stat__value')
 
-  async function generate(deck, prompt, engine, behaviour, padName) {
+  async function generate(deck, prompt, engine, behaviour, padName, timeout) {
     await deck.getByLabel('Generate prompt').fill(prompt)
     await deck.getByLabel('Engine').selectOption(engine)
     await deck.getByLabel('Type').selectOption(behaviour)
@@ -60,7 +60,7 @@ try {
       .waitFor({ timeout: 2_000 })
     await deck
       .getByRole('button', { name: padName, exact: true })
-      .waitFor({ timeout: 60_000 })
+      .waitFor({ timeout: timeout ?? 60_000 })
   }
 
   // ── Both decks streaming, then generate under load ─────────────────
@@ -116,23 +116,40 @@ try {
   const underrunsB = (await underruns(deckB).textContent()).trim()
   console.log(`underruns through it all: deck a=${underrunsA} deck b=${underrunsB}`)
 
-  // ── Magenta engine: a stopped deck's own worker fills a pad ────────
-  await deckB.getByRole('button', { name: 'Stop', exact: true }).click()
-  await page.waitForTimeout(1_000)
-  await generate(deckB, 'deep dub chords', 'magenta', 'oneshot', 'Loop slot 1')
-  console.log('magenta clip rendered on the stopped deck, slot 1 lit')
+  // ── Magenta engine: the booth's third worker, both decks live ──────
+  // First use carries the render worker's model load in the pending
+  // state, hence the long timeout; the streams must ride through it.
+  await generate(
+    deckB,
+    'deep dub chords',
+    'magenta',
+    'oneshot',
+    'Loop slot 1',
+    240_000,
+  )
+  const underrunsAfterMagenta = [
+    (await underruns(deckA).textContent()).trim(),
+    (await underruns(deckB).textContent()).trim(),
+  ]
+  console.log(
+    `magenta clip rendered with both decks live; underruns now a=${underrunsAfterMagenta[0]} b=${underrunsAfterMagenta[1]}`,
+  )
 
   await page.screenshot({ path: 'm18-verification.png', fullPage: true })
   await deckA.getByRole('button', { name: 'Stop', exact: true }).click()
+  await deckB.getByRole('button', { name: 'Stop', exact: true }).click()
 
   if (generateRequests.length !== 2) {
     throw new Error(`expected 2 generate requests, saw ${generateRequests.length}`)
   }
   if (
     renderRequests.length !== 1 ||
-    !renderRequests[0].url.endsWith('/api/deck/b/render')
+    !renderRequests[0].url.endsWith('/api/render')
   ) {
-    throw new Error('the magenta clip did not go through the deck render route')
+    throw new Error('the magenta clip did not go through the render engine')
+  }
+  if (underrunsAfterMagenta.some((count) => count !== '0')) {
+    throw new Error('a deck underran while the magenta engine rendered')
   }
   if (generateRequests[0].kind !== 'sfx') {
     throw new Error('the one-shot request did not use the sfx model')

@@ -77,10 +77,11 @@ export type DeckControls = {
   setLoopSeconds: (seconds: number) => void
   /** Generated pads (M18, ADR-0012): fill the first empty slot from a
    * text prompt. The engine picks the sound world — Stable Audio's
-   * sfx/music models, or this deck's own Magenta worker (stopped decks
-   * only; rendering would stall a playing stream). One-shots overlay,
-   * loops replace like captures; music-model loops snap to whole bars
-   * while the tempo gate is locked and respect the quality floor. */
+   * sfx/music models, or the booth's own third Magenta engine (a
+   * dedicated render worker; first use pays its model load inside the
+   * pending state). One-shots overlay, loops replace like captures;
+   * music-model loops snap to whole bars while the tempo gate is
+   * locked and respect the quality floor. */
   generateToPad: (prompt: string, engine: GenerateEngine, oneShot: boolean) => void
   /** Why the last generation produced nothing, until the next attempt. */
   generateError: string | null
@@ -573,9 +574,7 @@ export function useDeck(deckId: DeckId): DeckControls {
           const [channel, response] = await Promise.all([
             ensureChannel(),
             fetch(
-              engine === 'magenta'
-                ? `/api/deck/${deckId}/render`
-                : '/api/generate',
+              engine === 'magenta' ? '/api/render' : '/api/generate',
               {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
@@ -623,7 +622,7 @@ export function useDeck(deckId: DeckId): DeckControls {
         }
       })()
     },
-    [setLoop, beat, ensureChannel, deckId],
+    [setLoop, beat, ensureChannel],
   )
 
   const setLoopSeconds = useCallback(

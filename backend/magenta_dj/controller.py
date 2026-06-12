@@ -67,23 +67,15 @@ class DeckProcess:
         # True while a restart is tearing down/spawning the worker, so the
         # pump doesn't misread the gap as a crash.
         self.restarting = False
-        # One clip render in flight per deck (M18): the worker is serial
-        # anyway; the lock keeps responses matched to requests.
-        self.render_lock = asyncio.Lock()
         self._spawn()
 
     def _spawn(self) -> None:
         ctx = mp.get_context("spawn")
         self.cmd_queue = ctx.Queue()
         self.out_queue = ctx.Queue(maxsize=OUT_QUEUE_CHUNKS * 2)
-        # Clip renders (M18) answer here, not on out_queue: a multi-second
-        # PCM result must never queue behind — or be drained with — the
-        # audio stream.
-        self.clip_queue = ctx.Queue()
         self.process = ctx.Process(
             target=run_deck_worker,
             args=(self.deck_id, self.model, self.cmd_queue, self.out_queue),
-            kwargs={"clip_queue": self.clip_queue},
             name=f"deck-{self.deck_id}",
             daemon=True,
         )
@@ -150,6 +142,9 @@ async def _deck_lifespan(_: FastAPI):
     for deck in decks.values():
         deck.shutdown()
     decks.clear()
+    if render_state["worker"] is not None:
+        render_state["worker"].shutdown()
+        render_state["worker"] = None
 
 
 app = FastAPI(lifespan=_deck_lifespan)
@@ -399,6 +394,72 @@ async def style_sample(deck_id: str, request: Request) -> dict:
 # Worst case: a 32 s clip at a pessimistic ~1× real time, plus a cold
 # prompt embed; well past it the worker is wedged, not slow.
 RENDER_TIMEOUT_SECONDS = 90
+# First use pays the model load; this bounds it.
+RENDER_READY_TIMEOUT_SECONDS = 180
+
+
+class RenderProcess:
+    """The third Magenta engine (M18): a worker that only renders clips.
+
+    Reuses the deck worker loop — a render worker is a deck worker that
+    never receives `play` — but lives apart from the decks, so pads can
+    fill while both streams run. Spawned lazily on the first request:
+    a resident third model (~2 GB for mrt2_small) is only paid for by
+    sessions that use it.
+    """
+
+    def __init__(self, model: str = DEFAULT_MODEL):
+        self.model = model
+        self.render_lock = asyncio.Lock()
+        self._spawn()
+
+    def _spawn(self) -> None:
+        ctx = mp.get_context("spawn")
+        self.cmd_queue = ctx.Queue()
+        # Only the "ready" status ever lands here; renders answer on
+        # clip_queue like a deck's.
+        self.out_queue = ctx.Queue(maxsize=4)
+        self.clip_queue = ctx.Queue()
+        self.ready = False
+        self.process = ctx.Process(
+            target=run_deck_worker,
+            args=("render", self.model, self.cmd_queue, self.out_queue),
+            kwargs={"clip_queue": self.clip_queue},
+            name="render-worker",
+            daemon=True,
+        )
+        self.process.start()
+
+    def await_ready(self) -> None:
+        """Block until the worker reports the model loaded (first use)."""
+        if self.ready:
+            return
+        kind, payload = self.out_queue.get(timeout=RENDER_READY_TIMEOUT_SECONDS)
+        if kind != "status" or payload.get("event") != "ready":
+            raise RuntimeError(f"render worker spoke out of turn: {payload!r}")
+        self.ready = True
+
+    def send(self, command: dict) -> None:
+        self.cmd_queue.put(command)
+
+    def shutdown(self) -> None:
+        if self.process.is_alive():
+            self.send({"type": "shutdown"})
+            self.process.join(timeout=5)
+            if self.process.is_alive():
+                self.process.terminate()
+
+
+# Created on the first /api/render call, never at startup.
+render_state: dict = {"worker": None}
+
+
+def ensure_render_worker() -> RenderProcess:
+    worker = render_state["worker"]
+    if worker is None or not worker.process.is_alive():
+        worker = RenderProcess()
+        render_state["worker"] = worker
+    return worker
 
 
 def float32_wav(pcm: bytes, sample_rate: int, channels: int) -> bytes:
@@ -417,20 +478,15 @@ def float32_wav(pcm: bytes, sample_rate: int, channels: int) -> bytes:
     return header + pcm
 
 
-@app.post("/api/deck/{deck_id}/render")
-async def render_clip(deck_id: str, request: Request) -> Response:
-    """Render a pad clip with the deck's own Magenta worker (M18).
+@app.post("/api/render")
+async def render_clip(request: Request) -> Response:
+    """Render a pad clip with the third Magenta engine (M18).
 
-    Body: JSON {prompt, seconds}. The worker refuses while the deck is
-    playing (rendering would stall the stream's pacing); a stopped
-    deck's warm model renders faster than real time. Returns the clip
-    as a float32 WAV.
+    Body: JSON {prompt, seconds}. The render worker spawns on the
+    first call (the model load happens inside that request's pending
+    state) and stays warm after; both decks keep streaming untouched.
+    Returns the clip as a float32 WAV.
     """
-    deck = decks.get(deck_id)
-    if deck is None:
-        raise HTTPException(status_code=404, detail=f"unknown deck {deck_id!r}")
-    if deck.restarting:
-        raise HTTPException(status_code=409, detail="deck is loading a model")
     try:
         parsed = await request.json()
     except json.JSONDecodeError:
@@ -459,14 +515,21 @@ async def render_clip(deck_id: str, request: Request) -> Response:
             status_code=422,
             detail=f"'seconds' must be {sa3.MIN_SECONDS}-{sa3.MAX_SECONDS}",
         )
-    async with deck.render_lock:
+    worker = ensure_render_worker()
+    async with worker.render_lock:
+        try:
+            await asyncio.to_thread(worker.await_ready)
+        except (queue.Empty, RuntimeError):
+            raise HTTPException(
+                status_code=502, detail="render engine failed to start"
+            ) from None
         # A previous timed-out render may have answered late; whatever
         # sits in the queue belongs to nobody now.
         with contextlib.suppress(queue.Empty):
             while True:
-                deck.clip_queue.get_nowait()
-        request_id = f"clip-{deck_id}-{time.monotonic_ns()}"
-        deck.send(
+                worker.clip_queue.get_nowait()
+        request_id = f"clip-{time.monotonic_ns()}"
+        worker.send(
             {
                 "type": "render_clip",
                 "id": request_id,
@@ -476,15 +539,14 @@ async def render_clip(deck_id: str, request: Request) -> Response:
         )
         try:
             result_id, result = await asyncio.to_thread(
-                deck.clip_queue.get, True, RENDER_TIMEOUT_SECONDS
+                worker.clip_queue.get, True, RENDER_TIMEOUT_SECONDS
             )
         except queue.Empty:
             raise HTTPException(status_code=502, detail="render timed out") from None
     if result_id != request_id:
         raise HTTPException(status_code=502, detail="render answered out of turn")
     if "error" in result:
-        status = 409 if result["error"] == "deck is playing" else 502
-        raise HTTPException(status_code=status, detail=result["error"])
+        raise HTTPException(status_code=502, detail=result["error"])
     return Response(
         content=float32_wav(result["pcm"], engine.SAMPLE_RATE, engine.CHANNELS),
         media_type="audio/wav",

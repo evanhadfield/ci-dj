@@ -733,12 +733,12 @@ Scope, ordered by risk:
    whole bars through the existing beat math — free-length the moment
    the gate blanks, honest like every M14 consumer — plus a measured
    quality floor (sm-music breaks up under ~4 s).
-4. **Magenta as the third engine.** A *stopped* deck's own worker —
-   model warm, faster than real time — renders clips from a fresh
-   state on a dedicated result queue, so pads can speak the booth's
-   own sound world. The worker's `playing` flag is the authoritative
-   refusal (rendering would stall a live stream's pacing); the UI
-   gates the option to silent decks.
+4. **Magenta as the third engine.** A dedicated render worker — the
+   deck worker loop reused, never told to play — fills pads with the
+   booth's own sound world while both decks stream. Spawned lazily on
+   first use (~2 GB resident after; the first request carries the
+   model load in its pending state), fresh generation state per clip,
+   results on a dedicated queue.
 5. **Hardware.** Nothing new to map: the M13 SAMPLER bank already
    fires the slots. Generation itself needs text — on-screen by
    design.
@@ -746,11 +746,11 @@ Scope, ordered by risk:
 **Exit criteria:** typing a prompt fills a chosen pad slot while both
 decks keep streaming with zero underruns; an SFX one-shot and a
 BPM-quantised musical loop each play through the existing loop path
-with EQ and Color FX live; a Magenta-rendered clip from a stopped
-deck fills a pad the same way; pending → ready states are honest
-throughout; measured latency and model-choice findings recorded in
-the ADR; the decode, quantisation, render, and endpoint seams
-unit-tested.
+with EQ and Color FX live; a Magenta-rendered clip fills a pad the
+same way while both decks keep playing; pending → ready states are
+honest throughout; measured latency and model-choice findings
+recorded in the ADR; the decode, quantisation, render, and endpoint
+seams unit-tested.
 
 ## M19 — Track deck: trade the stream for a composed track
 

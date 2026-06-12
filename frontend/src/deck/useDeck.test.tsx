@@ -716,7 +716,7 @@ describe('useDeck generated pads', () => {
     expect(body.seconds).toBeGreaterThanOrEqual(7)
   })
 
-  it('renders through the deck worker for the magenta engine', async () => {
+  it('renders through the third Magenta engine', async () => {
     const fetchMock = stubFetchOk()
     const { engine, channel } = makeFakeEngine()
     const { result } = await playingDeck(engine)
@@ -726,7 +726,7 @@ describe('useDeck generated pads', () => {
     act(() => result.current.generateToPad('dub chords', 'magenta', false))
     await act(async () => {})
     const [url] = fetchMock.mock.calls.at(-1)! as unknown as [string]
-    expect(url).toBe('/api/deck/a/render')
+    expect(url).toBe('/api/render')
     const body = requestBody(fetchMock)
     // No kind field, no BPM stamp (Magenta ignores tempo text by
     // design), no sm-music quality floor — the picker's length plus

@@ -170,12 +170,8 @@ export function DeckColumn({
 
   const connected = state.connection === 'open'
   const operable = isDeckOperable(state)
-  // The deck's own worker can only render while silent: playing (or
-  // primed — same pacing loop, just off air) would stall the stream.
-  const magentaBusy = generateEngine === 'magenta' && (state.playing || primed)
   const canGenerate =
     connected &&
-    !magentaBusy &&
     Boolean(generateDraft.trim()) &&
     loop.slots.some((slot) => slot.state === 'empty')
   const fireGenerate = () => {
@@ -687,9 +683,9 @@ export function DeckColumn({
       {/* Generated pads (M18, ADR-0012): a prompt fills the first empty
           slot — one-shots overlay the deck, loops replace it like a
           capture and share the length picker above. The engine picks
-          the sound world; the deck's own Magenta worker can only
-          render while the deck is silent (a playing worker is paced
-          to its stream). */}
+          the sound world: Stable Audio's models, or the booth's own
+          third Magenta engine (its first use pays the model load
+          inside the pending state). */}
       <div
         className="deck__generate"
         role="group"

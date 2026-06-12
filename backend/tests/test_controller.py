@@ -29,21 +29,14 @@ class FakeDeck:
         self.model = "mrt2_small"
         self.cmd_queue = queue.Queue()
         self.out_queue = queue.Queue()
-        self.clip_queue = queue.Queue()
-        self.render_lock = asyncio.Lock()
         self.process = FakeProcess()
         self.connected = False
         self.restarting = False
         self.stopped = False
         self.restarted_with = []
-        # The worker half of the render round-trip: a configured
-        # response answers any render_clip command immediately.
-        self.render_response = None
 
     def send(self, command):
         self.cmd_queue.put(command)
-        if command.get("type") == "render_clip" and self.render_response is not None:
-            self.clip_queue.put((command["id"], self.render_response))
 
     def drain(self):
         while not self.out_queue.empty():
@@ -58,6 +51,30 @@ class FakeDeck:
         self.restarted_with.append(model)
         self.process.alive = True
         self.restarting = False
+
+
+class FakeRenderWorker:
+    """The third-engine worker, answering render commands immediately."""
+
+    def __init__(self):
+        self.cmd_queue = queue.Queue()
+        self.clip_queue = queue.Queue()
+        self.render_lock = asyncio.Lock()
+        self.process = FakeProcess()
+        self.ready = False
+        self.ready_waits = 0
+        # The worker half of the round-trip: a configured response
+        # answers any render_clip command.
+        self.render_response = None
+
+    def await_ready(self):
+        self.ready_waits += 1
+        self.ready = True
+
+    def send(self, command):
+        self.cmd_queue.put(command)
+        if command.get("type") == "render_clip" and self.render_response is not None:
+            self.clip_queue.put((command["id"], self.render_response))
 
 
 @pytest.fixture
@@ -475,7 +492,14 @@ def test_generate_maps_cli_failure_to_502(client, monkeypatch):
     assert "no DiT weights" in response.json()["detail"]
 
 
-# --- /api/deck/{deck}/render (M18, Magenta as pad generator) --------------
+# --- /api/render (M18, the third Magenta engine) --------------------------
+
+
+@pytest.fixture
+def render_worker(monkeypatch):
+    fake = FakeRenderWorker()
+    monkeypatch.setitem(controller.render_state, "worker", fake)
+    return fake
 
 
 def test_float32_wav_wraps_the_pcm_exactly():
@@ -490,63 +514,45 @@ def test_float32_wav_wraps_the_pcm_exactly():
     assert wav[44:] == pcm
 
 
-def test_render_returns_the_worker_clip_as_wav(client, deck):
-    deck.render_response = {"pcm": b"\x00" * 16}
-    response = client.post(
-        "/api/deck/a/render", json={"prompt": " air horn ", "seconds": 2.0}
-    )
+def test_render_returns_the_worker_clip_as_wav(client, render_worker):
+    render_worker.render_response = {"pcm": b"\x00" * 16}
+    response = client.post("/api/render", json={"prompt": " air horn ", "seconds": 2.0})
     assert response.status_code == 200
     assert response.headers["content-type"] == "audio/wav"
     assert response.content[44:] == b"\x00" * 16
-    command = deck.cmd_queue.get_nowait()
+    assert render_worker.ready_waits == 1  # first use waits for the model
+    command = render_worker.cmd_queue.get_nowait()
     assert command["type"] == "render_clip"
     assert command["prompt"] == "air horn"
     assert command["seconds"] == 2.0
 
 
-def test_render_maps_a_playing_deck_to_409(client, deck):
-    deck.render_response = {"error": "deck is playing"}
-    response = client.post(
-        "/api/deck/a/render", json={"prompt": "air horn", "seconds": 2.0}
-    )
-    assert response.status_code == 409
-    assert "playing" in response.json()["detail"]
-
-
-def test_render_maps_worker_failure_to_502(client, deck):
-    deck.render_response = {"error": "render failed"}
-    response = client.post(
-        "/api/deck/a/render", json={"prompt": "air horn", "seconds": 2.0}
-    )
+def test_render_maps_worker_failure_to_502(client, render_worker):
+    render_worker.render_response = {"error": "render failed"}
+    response = client.post("/api/render", json={"prompt": "air horn", "seconds": 2.0})
     assert response.status_code == 502
 
 
-def test_render_discards_a_stale_answer_in_the_queue(client, deck):
+def test_render_discards_a_stale_answer_in_the_queue(client, render_worker):
     # A timed-out render answered late; the next request must not be
     # served someone else's clip.
-    deck.clip_queue.put(("clip-old", {"pcm": b"\xff" * 8}))
-    deck.render_response = {"pcm": b"\x00" * 8}
-    response = client.post(
-        "/api/deck/a/render", json={"prompt": "air horn", "seconds": 2.0}
-    )
+    render_worker.clip_queue.put(("clip-old", {"pcm": b"\xff" * 8}))
+    render_worker.render_response = {"pcm": b"\x00" * 8}
+    response = client.post("/api/render", json={"prompt": "air horn", "seconds": 2.0})
     assert response.status_code == 200
     assert response.content[44:] == b"\x00" * 8
 
 
-def test_render_rejects_unknown_deck_and_restarting(client, deck):
-    assert (
-        client.post(
-            "/api/deck/zz/render", json={"prompt": "x", "seconds": 2.0}
-        ).status_code
-        == 404
-    )
-    deck.restarting = True
-    assert (
-        client.post(
-            "/api/deck/a/render", json={"prompt": "x", "seconds": 2.0}
-        ).status_code
-        == 409
-    )
+def test_render_respawns_a_dead_worker(client, render_worker, monkeypatch):
+    render_worker.process.alive = False
+    spawned = FakeRenderWorker()
+    spawned.render_response = {"pcm": b"\x00" * 8}
+    # ensure_render_worker sees the dead process and builds a fresh one.
+    monkeypatch.setattr(controller, "RenderProcess", lambda: spawned)
+
+    response = client.post("/api/render", json={"prompt": "x", "seconds": 2.0})
+    assert response.status_code == 200
+    assert spawned.ready_waits == 1
 
 
 @pytest.mark.parametrize(
@@ -560,8 +566,8 @@ def test_render_rejects_unknown_deck_and_restarting(client, deck):
         "not an object",
     ],
 )
-def test_render_validates_the_trust_boundary(client, deck, body):
-    deck.render_response = {"pcm": b"\x00" * 8}
-    response = client.post("/api/deck/a/render", json=body)
+def test_render_validates_the_trust_boundary(client, render_worker, body):
+    render_worker.render_response = {"pcm": b"\x00" * 8}
+    response = client.post("/api/render", json=body)
     assert response.status_code == 422
-    assert deck.cmd_queue.empty()
+    assert render_worker.cmd_queue.empty()

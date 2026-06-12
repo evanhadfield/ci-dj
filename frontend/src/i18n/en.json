@@ -109,7 +109,7 @@
       "engine": "Engine",
       "engineSfx": "SFX (Stable Audio)",
       "engineMusic": "Music (Stable Audio)",
-      "engineMagenta": "Magenta (stopped deck)",
+      "engineMagenta": "Magenta",
       "kind": "Type",
       "kindOneShot": "One-shot",
       "kindLoop": "Loop",

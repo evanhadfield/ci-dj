@@ -70,18 +70,20 @@ and what happens when it's missing or fails.
   CLI → 502 with the captured stderr tail; prompt/seconds validation
   (non-blank, bounded length and duration) → 422 at the trust
   boundary.
-- **The deck's own model is the third engine.** A *stopped* deck's
-  Magenta worker — model warm, generating faster than real time —
-  renders standalone clips via a `render_clip` command: fresh
-  generation state and its own style blend, so the stream's
-  continuity is never touched. The worker's own `playing` flag is the
-  authoritative refusal (a playing worker is paced to its stream;
-  rendering would stall it for seconds — surfaced as 409, and the UI
-  gates the option to silent decks rather than hiding the failure).
-  Results travel a dedicated clip queue, matched to requests by id
-  with stale answers discarded, and `/api/deck/{deck}/render` returns
-  the clip as a float32 WAV (IEEE format 3 — no quantisation between
-  the worker and `decodeAudioData`).
+- **Magenta is the third engine, as its own worker.** A dedicated
+  render process — the deck worker loop reused verbatim; a render
+  worker is a deck worker that never receives `play` — serves
+  `render_clip` commands, so pads can speak the booth's own sound
+  world *while both decks stream*. It spawns lazily on the first
+  `/api/render` call (a resident third model, ~2 GB for `mrt2_small`,
+  is only paid for by sessions that use it; the first request carries
+  the model load inside its pending state) and respawns if found
+  dead. Renders use a fresh generation state per clip; results travel
+  a dedicated clip queue, matched to requests by id with stale
+  answers discarded, and the endpoint returns a float32 WAV (IEEE
+  format 3 — no quantisation between the worker and
+  `decodeAudioData`). The deck workers keep their `playing` refusal
+  as a safety net, but nothing routes renders at them anymore.
 
 ## Consequences
 
@@ -94,9 +96,11 @@ and what happens when it's missing or fails.
 - An un-versioned upstream: the CLI flags are the contract and a
   rebase upstream can break it. Mitigated by the pinned commit, one
   owning module, and errors that name the problem.
-- A Magenta clip render holds its worker for a few seconds and
-  commands queue behind it. Accepted: it is only offered on a silent
-  deck, and the renders are short.
+- A session that touches the Magenta engine holds a third model
+  resident (~2 GB) until shutdown. Accepted: it is lazy, and the
+  alternative — borrowing a deck's worker — made generation
+  availability depend on transport state, a coupling the booth could
+  feel.
 - First-ever generation on a fresh machine pays the HF weight
   download (~2.3 GB) inside the request timeout; the 503 setup hint
   documents pre-warming via one manual `sa3` run.

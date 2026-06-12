@@ -1044,7 +1044,7 @@ describe('DeckColumn', () => {
     )
   })
 
-  it('offers Magenta only while the deck is silent', () => {
+  it('offers Magenta while the deck plays — the third engine is its own worker', () => {
     const onGenerateToPad = vi.fn()
     renderPanel(
       { connection: 'open', playing: true },
@@ -1056,18 +1056,8 @@ describe('DeckColumn', () => {
     fireEvent.change(screen.getByLabelText('Engine'), {
       target: { value: 'magenta' },
     })
-    const button = screen.getByRole('button', { name: 'Generate' })
-    expect(button).toBeDisabled()
-    // Enter must respect the same gate, not sneak past the button.
-    fireEvent.keyDown(screen.getByLabelText('Generate prompt'), {
-      key: 'Enter',
-    })
-    expect(onGenerateToPad).not.toHaveBeenCalled()
-    // The Stable Audio engines stay available on a playing deck.
-    fireEvent.change(screen.getByLabelText('Engine'), {
-      target: { value: 'sfx' },
-    })
-    expect(button).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Generate' }))
+    expect(onGenerateToPad).toHaveBeenCalledWith('dub chords', 'magenta', true)
   })
 
   it('refuses to generate without a prompt or an empty slot', () => {

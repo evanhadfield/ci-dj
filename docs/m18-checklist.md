@@ -37,13 +37,14 @@ behaving like deck material in the booth.
 - [ ] Color FX and the channel fader stay live on the loop.
 - [ ] Re-press returns to the live stream without a glitch.
 
-## Magenta engine (stopped deck)
+## Magenta engine (the booth's own third worker)
 
-- [ ] With the deck **stopped**, pick Engine: Magenta and generate
-      (e.g. "deep dub chords") — the pad fills in a few seconds and
-      sounds like the booth's own engine, not Stable Audio.
-- [ ] While the deck is playing, the Magenta option honestly refuses
-      (Generate disabled); the Stable Audio engines still work.
+- [ ] With **both decks playing**, pick Engine: Magenta and generate
+      (e.g. "deep dub chords"). The first use takes longer — the
+      render worker loads its model inside the pending state — and
+      neither stream glitches.
+- [ ] The clip sounds like the booth's own engine, not Stable Audio.
+- [ ] A second Magenta generation is fast (the worker stays warm).
 
 ## Honesty
 
