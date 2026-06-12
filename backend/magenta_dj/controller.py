@@ -19,9 +19,10 @@ import queue
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-from . import cue, engine
+from . import cue, engine, sa3
 from .worker import run_deck_worker
 
 logger = logging.getLogger(__name__)
@@ -384,6 +385,57 @@ async def style_sample(deck_id: str, request: Request) -> dict:
         )
     deck.send({"type": "embed_sample", "id": sample_id, "pcm": body})
     return {"id": sample_id, "seconds": round(seconds, 2)}
+
+
+@app.post("/api/generate")
+async def generate_audio(request: Request) -> Response:
+    """Generate a pad clip with Stable Audio 3 (M18, ADR-0012).
+
+    Body: JSON {prompt, seconds, kind} with kind in {sfx, music}. Returns
+    the WAV. Generation runs in a spawned subprocess and is serialised, so
+    a busy moment queues (~3 s) rather than stacking memory.
+    """
+    try:
+        parsed = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="body must be JSON") from None
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=422, detail="body must be a JSON object")
+    prompt = parsed.get("prompt")
+    if not (isinstance(prompt, str) and prompt.strip()):
+        raise HTTPException(
+            status_code=422, detail="'prompt' must be a non-empty string"
+        )
+    prompt = prompt.strip()
+    if len(prompt) > sa3.MAX_PROMPT_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"'prompt' must be at most {sa3.MAX_PROMPT_LENGTH} characters",
+        )
+    kind = parsed.get("kind")
+    if kind not in sa3.KINDS:
+        raise HTTPException(
+            status_code=422, detail=f"'kind' must be one of {sorted(sa3.KINDS)}"
+        )
+    seconds = parsed.get("seconds")
+    if (
+        isinstance(seconds, bool)
+        or not isinstance(seconds, (int, float))
+        or not math.isfinite(seconds)
+        or not sa3.MIN_SECONDS <= seconds <= sa3.MAX_SECONDS
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=f"'seconds' must be {sa3.MIN_SECONDS}-{sa3.MAX_SECONDS}",
+        )
+    try:
+        wav = await sa3.generate(prompt, float(seconds), kind)
+    except sa3.GenerationUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from None
+    except sa3.GenerationFailed as error:
+        logger.warning("generation failed: %s", error)
+        raise HTTPException(status_code=502, detail=str(error)) from None
+    return Response(content=wav, media_type="audio/wav")
 
 
 @app.get("/api/cue/outputs")

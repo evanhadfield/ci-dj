@@ -379,3 +379,89 @@ def test_style_sample_validates_id_and_body(client, deck):
     long = client.post("/api/deck/a/style-sample?id=s", content=sample_body(20))
     assert long.status_code == 413
     assert deck.cmd_queue.empty()
+
+
+# --- /api/generate (M18, ADR-0012) ---------------------------------------
+
+
+def generate_request(**overrides):
+    body = {"prompt": "vinyl spinback", "seconds": 3.0, "kind": "sfx"}
+    body.update(overrides)
+    return body
+
+
+def test_generate_returns_wav_and_strips_the_prompt(client, monkeypatch):
+    calls = []
+
+    async def fake_generate(prompt, seconds, kind):
+        calls.append((prompt, seconds, kind))
+        return b"RIFFwav"
+
+    monkeypatch.setattr(controller.sa3, "generate", fake_generate)
+    response = client.post(
+        "/api/generate", json=generate_request(prompt="  deep house loop  ")
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == b"RIFFwav"
+    assert calls == [("deep house loop", 3.0, "sfx")]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        generate_request(prompt=""),
+        generate_request(prompt="   "),
+        generate_request(prompt=7),
+        generate_request(prompt="x" * 501),
+        generate_request(kind="track"),
+        generate_request(kind=None),
+        generate_request(seconds=0.1),
+        generate_request(seconds=33.0),
+        generate_request(seconds=True),
+        generate_request(seconds="3"),
+        "not an object",
+    ],
+)
+def test_generate_validates_the_trust_boundary(client, monkeypatch, body):
+    async def fake_generate(prompt, seconds, kind):  # pragma: no cover
+        raise AssertionError("invalid input must not reach generation")
+
+    monkeypatch.setattr(controller.sa3, "generate", fake_generate)
+    response = client.post("/api/generate", json=body)
+    assert response.status_code == 422
+
+
+def test_generate_rejects_nan_seconds(client, monkeypatch):
+    # httpx's json= encoder refuses NaN, but Python's json.loads parses it —
+    # so it can reach the server, and the boundary must catch it.
+    async def fake_generate(prompt, seconds, kind):  # pragma: no cover
+        raise AssertionError("invalid input must not reach generation")
+
+    monkeypatch.setattr(controller.sa3, "generate", fake_generate)
+    response = client.post(
+        "/api/generate",
+        content='{"prompt": "x", "seconds": NaN, "kind": "sfx"}',
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 422
+
+
+def test_generate_maps_missing_checkout_to_503(client, monkeypatch):
+    async def fake_generate(prompt, seconds, kind):
+        raise controller.sa3.GenerationUnavailable("setup hint")
+
+    monkeypatch.setattr(controller.sa3, "generate", fake_generate)
+    response = client.post("/api/generate", json=generate_request())
+    assert response.status_code == 503
+    assert "setup hint" in response.json()["detail"]
+
+
+def test_generate_maps_cli_failure_to_502(client, monkeypatch):
+    async def fake_generate(prompt, seconds, kind):
+        raise controller.sa3.GenerationFailed("error: no DiT weights found")
+
+    monkeypatch.setattr(controller.sa3, "generate", fake_generate)
+    response = client.post("/api/generate", json=generate_request())
+    assert response.status_code == 502
+    assert "no DiT weights" in response.json()["detail"]
