@@ -333,11 +333,13 @@ describe('createFlx4Translator', () => {
           kind: 'track_seek',
           deck,
           steps: 1,
+          shifted: false,
         })
         expect(translate([status, cc, 0x3e])).toEqual({
           kind: 'track_seek',
           deck,
           steps: -2,
+          shifted: false,
         })
         expect(translate([status, cc, 0x40])).toBeNull()
       },
@@ -362,6 +364,24 @@ describe('createFlx4Translator', () => {
         })
       },
     )
+
+    it('held SHIFT marks jog ticks for scrubbing (M20)', () => {
+      const translate = createFlx4Translator()
+      translate([0x90, 0x3f, PRESS]) // SHIFT down on deck a
+      expect(translate([0xb0, 0x21, 0x41])).toEqual({
+        kind: 'track_seek',
+        deck: 'a',
+        steps: 1,
+        shifted: true,
+      })
+      translate([0x90, 0x3f, RELEASE])
+      expect(translate([0xb0, 0x21, 0x41])).toEqual({
+        kind: 'track_seek',
+        deck: 'a',
+        steps: 1,
+        shifted: false,
+      })
+    })
 
     it('jog ticks never pollute the 14-bit MSB cache', () => {
       const translate = createFlx4Translator()

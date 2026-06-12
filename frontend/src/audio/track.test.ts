@@ -137,10 +137,10 @@ describe('trackPeaks', () => {
 })
 
 describe('tempoSliderToRate', () => {
-  it('maps centre to unity and the ends to the envelope edges', () => {
+  it('maps centre to unity and the ends to the envelope edges (orientation measured on device)', () => {
     expect(tempoSliderToRate(0.5)).toBeCloseTo(1)
-    expect(tempoSliderToRate(0)).toBeCloseTo(1 + TRACK_RATE_RANGE)
-    expect(tempoSliderToRate(1)).toBeCloseTo(1 - TRACK_RATE_RANGE)
+    expect(tempoSliderToRate(0)).toBeCloseTo(1 - TRACK_RATE_RANGE)
+    expect(tempoSliderToRate(1)).toBeCloseTo(1 + TRACK_RATE_RANGE)
   })
 })
 

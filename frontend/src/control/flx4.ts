@@ -224,7 +224,15 @@ export function createFlx4Translator(): Flx4Translator {
     const jogDeck = CC_DECK[status]
     if (jogDeck && JOG_CCS.includes(number)) {
       if (value === 0x40) return null
-      return { kind: 'track_seek', deck: jogDeck, steps: value - 0x40 }
+      return {
+        kind: 'track_seek',
+        deck: jogDeck,
+        steps: value - 0x40,
+        // SHIFT+jog scrubs even mid-play (the CDJ search convention,
+        // measured want on the device: a plain playing jog is a
+        // phase nudge and reads as "scrubbing stopped working").
+        shifted: shiftHeld[jogDeck],
+      }
     }
 
     const msbBuild = ccBuilder(status, number, shiftHeld)

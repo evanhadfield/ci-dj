@@ -70,8 +70,8 @@ remains the verification tool.
 
 | Control | Message | → App intent |
 | ------- | ------- | ------------ |
-| Jog wheel (turn) deck 1 / 2 | `0xB0`/`0xB1` CC `0x21` (platter) / `0x22` (rim), relative around `0x40` (`0x41` = +1 CW) | the platter's dual role on a playback deck: paused = relative seek, playing = phase nudge (`track_seek`, M20); a realtime deck ignores the ticks — no scratch concept on the stream (ADR-0004). Encoding from the Mixxx chart; confirm with the monitor |
-| Tempo slider deck 1 / 2 | `0xB0`/`0xB1` CC `0x00` (LSB `0x20`) | varispeed on a playback deck (`track_rate`, M20, ADR-0014 — playback rate is not generation tempo, so ADR-0004 stands); realtime decks ignore it. Pioneer convention: down = faster — confirm orientation with the monitor |
+| Jog wheel (turn) deck 1 / 2 | `0xB0`/`0xB1` CC `0x21` (platter) / `0x22` (rim), relative around `0x40` (`0x41` = +1 CW) | the platter's dual role on a playback deck: paused = relative seek, playing = phase nudge, and **SHIFT + jog scrubs regardless** (the CDJ search convention — added after a device run where the nudge read as "scrubbing stopped working"); a realtime deck ignores the ticks — no scratch concept on the stream (ADR-0004) |
+| Tempo slider deck 1 / 2 | `0xB0`/`0xB1` CC `0x00` (LSB `0x20`) | varispeed on a playback deck (`track_rate`, M20, ADR-0014 — playback rate is not generation tempo, so ADR-0004 stands); realtime decks ignore it. Orientation **measured on the device**: low values = slow end (the chart assumption shipped inverted and was caught on hardware) |
 
 Reinterpreted, no new bytes: on a deck in playback mode the existing
 transport messages drive the track instead of the worker — PLAY/PAUSE

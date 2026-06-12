@@ -98,8 +98,9 @@ export function applyAppIntent(
       // stream keeps its no-scratch stance (ADR-0004).
       if (deck.mode !== 'playback') return
       // The dual role of a real platter (M20): playing = phase nudge,
-      // paused = seek.
-      if (deck.track?.playing) {
+      // paused = seek — and SHIFT+jog scrubs regardless (the CDJ
+      // search convention).
+      if (!intent.shifted && deck.track?.playing) {
         deck.nudgeTrackPhase(intent.steps * JOG_NUDGE_SECONDS)
       } else {
         deck.nudgeTrack(intent.steps * JOG_SEEK_SECONDS)

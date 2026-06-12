@@ -13,11 +13,11 @@ orientation no script can judge (ADR-0014).
 
 ## Tempo and SYNC
 
-- [ ] The FLX4 **tempo slider** on deck 2 rides deck B's rate: the
+- [x] The FLX4 **tempo slider** on deck 2 rides deck B's rate: the
       BPM readout follows, the pitch audibly shifts with it (the
-      varispeed trade-off, ADR-0014). **Check orientation**: Pioneer
-      convention is down = faster — if it feels inverted, note it and
-      flip the mapping in `tempoSliderToRate`.
+      varispeed trade-off, ADR-0014). Orientation was measured
+      inverted on the first device run and flipped in
+      `tempoSliderToRate` — re-confirm it now feels right.
 - [ ] First touch of the slider jumps the rate to the slider's
       position (no soft-takeover — consistent with volume/EQ). Note
       if this is jarring in practice.
@@ -32,6 +32,9 @@ orientation no script can judge (ADR-0014).
       audibly drags/pushes the phase (~10 ms), the music bends — no
       clicks, no jumps. Judge the feel; note a better
       `JOG_NUDGE_SECONDS` if 10 ms is too fine or too coarse.
+- [ ] **SHIFT + jog scrubs** while playing (the CDJ search
+      convention, added after the first device run); plain jog on a
+      paused track still seeks.
 - [ ] Nudge until the kicks coincide: the **phase meter** needle sits
       centre when your ears say locked — the meter must agree with
       the room, not the wire (the buffer-lead correction, ADR-0014).
@@ -43,8 +46,12 @@ orientation no script can judge (ADR-0014).
 
 ## Grid honesty
 
-- [ ] The beat ticks on deck B's overview line up with the audible
-      kicks across the whole track (downbeats heavier).
+- [ ] The beat ticks on deck B's overview are *visible* (the first
+      device run found per-beat ticks fusing into a solid band on a
+      2-minute track — they now stride up to downbeats/bars) and the
+      heavy marks line up with the audible kicks across the track.
+      If no ticks at all, the take refused a grid — the console's
+      `[beatgrid]` lines say why; compose another take.
 - [ ] Load a beatless track (generate an ambient drone): no ticks, no
       meter, BPM dash — and SYNC still works if the *coarse* verdict
       exists, refuses honestly if not.

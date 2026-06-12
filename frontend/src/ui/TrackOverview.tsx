@@ -59,20 +59,26 @@ export function TrackOverview({
       const half = Math.max(1, (amplitude * HEIGHT * 0.92) / 2)
       context.fillRect(x, HEIGHT / 2 - half, 1, half * 2)
     }
-    // Beatgrid ticks (M20): top edge, downbeats heavier — only while
-    // the grid is confident (null grid, no ticks; the honesty rule).
+    // Beatgrid ticks (M20): top edge, only while the grid is
+    // confident (null grid, no ticks; the honesty rule). Density-
+    // aware: a 2-minute track is ~270 beats across 480 px — drawing
+    // every beat fuses into a solid band (found on the device), so
+    // ticks step up to downbeats, then bars-of-4, until they fit.
     if (grid && duration > 0) {
       const tick =
         getComputedStyle(canvas).getPropertyValue('--color-text-muted').trim() ||
         '#888888'
       context.fillStyle = tick
       const period = 60 / grid.bpm
+      const pxPerBeat = (period / duration) * WIDTH
+      const stride = pxPerBeat >= 6 ? 1 : pxPerBeat >= 1.5 ? 4 : 16
       const first = grid.firstBeatSeconds % period
-      let beat = Math.round((grid.firstBeatSeconds - first) / period)
+      let beat = 0
       for (let t = first; t < duration; t += period, beat++) {
+        if (beat % stride !== 0) continue
         const x = Math.round((t / duration) * WIDTH)
-        const downbeat = ((beat % 4) + 4) % 4 === 0
-        context.fillRect(x, 0, 1, downbeat ? 12 : 6)
+        const heavy = beat % (stride * 4) === 0
+        context.fillRect(x, 0, 1, heavy ? 12 : 6)
       }
     }
   }, [peaks, accent, grid, duration])

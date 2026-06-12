@@ -99,10 +99,11 @@ export function trackPeaks(
 }
 
 /** Map the FLX4 tempo slider (14-bit, 0..1) onto the varispeed range.
- * Pioneer convention: slider down = faster, so low MIDI values are
- * the fast end — confirm orientation on the device (checklist). */
+ * Orientation MEASURED on the device (M20 checklist): this firmware
+ * sends low values at the slow end — the opposite of the chart
+ * assumption, which shipped inverted and was caught on hardware. */
 export function tempoSliderToRate(value: number): number {
-  return clampRate(1 + (0.5 - value) * 2 * TRACK_RATE_RANGE)
+  return clampRate(1 + (value - 0.5) * 2 * TRACK_RATE_RANGE)
 }
 
 /** Phase offset between two beat clocks, wrapped to [-0.5, 0.5)
