@@ -258,7 +258,15 @@ checklist.
 
 ## M22 — Dual zoomed waveforms: visual beatmatching
 
-**Status: ⬜ planned.**
+**Status: 🔶 built (2026-06-12), pending eye verification.** Pulled
+forward into the M20 verification workflow — judging an audible lock
+with only a needle proved too hard on the device. Shipped: hop-indexed
+band envelopes for both decks (offline at track load; a rolling
+60-second scroller on the live wire, verified identical to the offline
+pass on the same audio), the ZoomStrip drawing them as colour at 60 Hz
+with beat marks from each deck's M20 clock, the stacked BeatView, and
+the persisted three-way layout switcher. Verified by eye alongside the
+M20 checklist.
 
 **Goal:** the visual half of beat-matching — stacked, beat-aligned,
 scrolling **band-coloured** close-up waveforms for both decks

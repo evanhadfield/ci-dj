@@ -38,6 +38,11 @@ orientation no script can judge (ADR-0014).
 - [ ] Nudge until the kicks coincide: the **phase meter** needle sits
       centre when your ears say locked — the meter must agree with
       the room, not the wire (the buffer-lead correction, ADR-0014).
+- [ ] The **beat view** (centre, switchable to top bar / off in the
+      statusbar — M22, pulled forward) shows both close-ups scrolling
+      with the audio, kicks blue-heavy and hats bright; when locked,
+      the beat marks of both strips visually coincide and the live
+      strip's marks land on its audible kicks.
 - [ ] The lock holds for **a minute** by ear with the meter steady;
       small drift corrects with single jog ticks.
 - [ ] Pause deck B: the meter goes dark (no track clock); the jog
