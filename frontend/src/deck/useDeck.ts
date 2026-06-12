@@ -5,9 +5,9 @@ import { EQ_FLAT, type EqBand } from '../audio/eq'
 import { fxRestPosition, type FxKind } from '../audio/fx'
 import {
   DEFAULT_LOOP_SECONDS,
+  generatedLoopSeconds,
   LOOP_CROSSFADE_SECONDS,
   LOOP_SLOT_COUNT,
-  quantiseLoopBars,
   quantiseLoopSeconds,
 } from '../audio/loops'
 import { createLoudnessTracker, trimDbFor } from '../audio/master'
@@ -46,6 +46,8 @@ export type LoopState = {
   seconds: number
 }
 
+export type GenerateEngine = 'sfx' | 'music' | 'magenta'
+
 const EMPTY_SLOT: LoopSlot = { state: 'empty' }
 
 function withSlot(current: LoopState, slot: number, value: LoopSlot): LoopSlot[] {
@@ -74,9 +76,12 @@ export type DeckControls = {
   clearLoopPad: (slot: number) => void
   setLoopSeconds: (seconds: number) => void
   /** Generated pads (M18, ADR-0012): fill the first empty slot from a
-   * text prompt — sfx one-shots overlay, loops replace like captures.
-   * Loop lengths snap to whole bars while the tempo gate is locked. */
-  generateToPad: (prompt: string, kind: 'sfx' | 'loop') => void
+   * text prompt. The engine picks the sound world — Stable Audio's
+   * sfx/music models, or this deck's own Magenta worker (stopped decks
+   * only; rendering would stall a playing stream). One-shots overlay,
+   * loops replace like captures; music-model loops snap to whole bars
+   * while the tempo gate is locked and respect the quality floor. */
+  generateToPad: (prompt: string, engine: GenerateEngine, oneShot: boolean) => void
   /** Why the last generation produced nothing, until the next attempt. */
   generateError: string | null
   /** Detected tempo of the deck's stream (M14, ADR-0010), or null
@@ -529,21 +534,22 @@ export function useDeck(deckId: DeckId): DeckControls {
   )
 
   const generateToPad = useCallback(
-    (prompt: string, kind: 'sfx' | 'loop') => {
+    (prompt: string, engine: GenerateEngine, oneShot: boolean) => {
       const trimmed = prompt.trim()
       if (!trimmed) return
       const current = loopRef.current
       const slot = current.slots.findIndex((entry) => entry.state === 'empty')
       if (slot === -1) return
-      const oneShot = kind === 'sfx'
-      // A locked tempo (M14) shapes a musical loop on both axes: the
-      // length snaps to whole bars and the prompt carries the figure —
-      // free-length and untouched the moment the gate is blank.
-      const gatedBpm = oneShot ? null : beat.gate.current()
+      // A locked tempo (M14) shapes a MUSIC-model loop on both axes:
+      // whole bars and the figure in the prompt, plus the measured
+      // quality floor (more bars beat broken audio). Other engines
+      // take the picker's length as asked — the floor is an sm-music
+      // fact, and Magenta ignores tempo text by design (ADR-0004).
+      const gatedBpm = !oneShot && engine === 'music' ? beat.gate.current() : null
       const seconds =
-        gatedBpm === null
-          ? current.seconds
-          : quantiseLoopBars(current.seconds, gatedBpm)
+        !oneShot && engine === 'music'
+          ? generatedLoopSeconds(current.seconds, gatedBpm)
+          : current.seconds
       const requestPrompt =
         gatedBpm === null ? trimmed : `${trimmed}, ${Math.round(gatedBpm)} BPM`
       // Loops carry the seam surplus the engine folds away (the capture
@@ -566,15 +572,24 @@ export function useDeck(deckId: DeckId): DeckControls {
           // deck has ever played (prepping weapons before the set).
           const [channel, response] = await Promise.all([
             ensureChannel(),
-            fetch('/api/generate', {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({
-                prompt: requestPrompt,
-                seconds: requestSeconds,
-                kind: oneShot ? 'sfx' : 'music',
-              }),
-            }),
+            fetch(
+              engine === 'magenta'
+                ? `/api/deck/${deckId}/render`
+                : '/api/generate',
+              {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(
+                  engine === 'magenta'
+                    ? { prompt: requestPrompt, seconds: requestSeconds }
+                    : {
+                        prompt: requestPrompt,
+                        seconds: requestSeconds,
+                        kind: engine,
+                      },
+                ),
+              },
+            ),
           ])
           if (!response.ok) {
             // The backend's detail names the problem (502/503 carry the
@@ -608,7 +623,7 @@ export function useDeck(deckId: DeckId): DeckControls {
         }
       })()
     },
-    [setLoop, beat, ensureChannel],
+    [setLoop, beat, ensureChannel, deckId],
   )
 
   const setLoopSeconds = useCallback(

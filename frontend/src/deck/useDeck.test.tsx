@@ -666,7 +666,7 @@ describe('useDeck generated pads', () => {
     const { engine, channel } = makeFakeEngine()
     const { result } = await playingDeck(engine)
 
-    act(() => result.current.generateToPad('  vinyl spinback  ', 'sfx'))
+    act(() => result.current.generateToPad('  vinyl spinback  ', 'sfx', true))
     expect(result.current.loop.slots[0]).toEqual({
       state: 'pending',
       label: 'vinyl spinback',
@@ -704,33 +704,71 @@ describe('useDeck generated pads', () => {
     act(() => void vi.advanceTimersByTime(3_000))
     const bpm = result.current.bpm!
 
-    act(() => result.current.generateToPad('deep house groove', 'loop'))
+    act(() => result.current.generateToPad('deep house groove', 'music', false))
     await act(async () => {})
     const body = requestBody(fetchMock)
     expect(body.kind).toBe('music')
     expect(body.prompt).toBe(`deep house groove, ${Math.round(bpm)} BPM`)
-    // The request carries the seam surplus on top of a whole-bar length.
+    // The request carries the seam surplus on top of a whole-bar length
+    // that clears the model's quality floor.
     const bars = ((body.seconds - 0.03) * bpm) / 60 / 4
     expect(Math.abs(bars - Math.round(bars))).toBeLessThan(1e-6)
+    expect(body.seconds).toBeGreaterThanOrEqual(7)
   })
 
-  it('keeps the free length and the bare prompt while the gate is blank', async () => {
+  it('renders through the deck worker for the magenta engine', async () => {
+    const fetchMock = stubFetchOk()
+    const { engine, channel } = makeFakeEngine()
+    const { result } = await playingDeck(engine)
+    streamClicks(128, 16)
+    act(() => void vi.advanceTimersByTime(3_000))
+
+    act(() => result.current.generateToPad('dub chords', 'magenta', false))
+    await act(async () => {})
+    const [url] = fetchMock.mock.calls.at(-1)! as unknown as [string]
+    expect(url).toBe('/api/deck/a/render')
+    const body = requestBody(fetchMock)
+    // No kind field, no BPM stamp (Magenta ignores tempo text by
+    // design), no sm-music quality floor — the picker's length plus
+    // the seam surplus.
+    expect(body).toEqual({ prompt: 'dub chords', seconds: 4.03 })
+    expect(channel.loadGeneratedLoop).toHaveBeenCalledWith(
+      0,
+      expect.any(ArrayBuffer),
+      false,
+    )
+  })
+
+  it('an sfx-model loop keeps the picker length without the music floor', async () => {
     const fetchMock = stubFetchOk()
     const { engine } = makeFakeEngine()
     const { result } = await playingDeck(engine)
 
-    act(() => result.current.generateToPad('dub siren', 'loop'))
+    act(() => result.current.generateToPad('crackle texture', 'sfx', false))
+    await act(async () => {})
+    const body = requestBody(fetchMock)
+    expect(body.kind).toBe('sfx')
+    expect(body.seconds).toBeCloseTo(4 + 0.03, 6)
+  })
+
+  it('floors the length and keeps the bare prompt while the gate is blank', async () => {
+    const fetchMock = stubFetchOk()
+    const { engine } = makeFakeEngine()
+    const { result } = await playingDeck(engine)
+
+    act(() => result.current.generateToPad('dub siren', 'music', false))
     await act(async () => {})
     const body = requestBody(fetchMock)
     expect(body.prompt).toBe('dub siren')
-    expect(body.seconds).toBeCloseTo(4 + 0.03, 6)
+    // 4 s from the picker would come back garbled (the measured floor).
+    expect(body.seconds).toBeCloseTo(7 + 0.03, 6)
   })
 
   it('fires a filled one-shot as an overlay, never as the active loop', async () => {
     stubFetchOk()
     const { engine, channel } = makeFakeEngine()
     const { result } = await playingDeck(engine)
-    act(() => result.current.generateToPad('air horn', 'sfx'))
+    act(() => result.current.generateToPad('air horn', 'sfx', true))
     await act(async () => {})
 
     await act(async () => result.current.toggleLoopPad(0))
@@ -747,7 +785,7 @@ describe('useDeck generated pads', () => {
     const { engine, channel } = makeFakeEngine()
     const { result } = await playingDeck(engine)
 
-    act(() => result.current.generateToPad('riser', 'sfx'))
+    act(() => result.current.generateToPad('riser', 'sfx', true))
     act(() => result.current.clearLoopPad(0))
     await act(async () =>
       finish({
@@ -773,14 +811,14 @@ describe('useDeck generated pads', () => {
     const { engine } = makeFakeEngine()
     const { result } = await playingDeck(engine)
 
-    act(() => result.current.generateToPad('riser', 'sfx'))
+    act(() => result.current.generateToPad('riser', 'sfx', true))
     await act(async () => {})
     expect(result.current.loop.slots[0].state).toBe('empty')
     expect(result.current.generateError).toBe('sa3_mlx checkout not found')
 
     // The next attempt starts clean.
     stubFetchOk()
-    act(() => result.current.generateToPad('riser', 'sfx'))
+    act(() => result.current.generateToPad('riser', 'sfx', true))
     expect(result.current.generateError).toBeNull()
   })
 
@@ -790,7 +828,7 @@ describe('useDeck generated pads', () => {
     vi.mocked(channel.loadGeneratedLoop).mockResolvedValue(false)
     const { result } = await playingDeck(engine)
 
-    act(() => result.current.generateToPad('riser', 'sfx'))
+    act(() => result.current.generateToPad('riser', 'sfx', true))
     await act(async () => {})
     expect(result.current.loop.slots[0].state).toBe('empty')
     expect(result.current.generateError).toMatch(/decoded/)
@@ -801,14 +839,14 @@ describe('useDeck generated pads', () => {
     const { engine, channel } = makeFakeEngine()
     const { result } = await playingDeck(engine)
 
-    act(() => result.current.generateToPad('   ', 'sfx'))
+    act(() => result.current.generateToPad('   ', 'sfx', true))
     expect(fetchMock).not.toHaveBeenCalled()
 
     for (let slot = 0; slot < 4; slot++) {
       await act(async () => result.current.toggleLoopPad(slot))
     }
     vi.mocked(channel.captureLoop).mockClear()
-    act(() => result.current.generateToPad('riser', 'sfx'))
+    act(() => result.current.generateToPad('riser', 'sfx', true))
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -826,7 +864,7 @@ describe('useDeck generated pads', () => {
     const { result } = renderDeck(engine)
     act(() => socket(0).serverOpen())
 
-    act(() => result.current.generateToPad('air horn', 'sfx'))
+    act(() => result.current.generateToPad('air horn', 'sfx', true))
     await act(async () => {})
     expect(engine.createDeckChannel).toHaveBeenCalled()
     expect(channel.loadGeneratedLoop).toHaveBeenCalled()

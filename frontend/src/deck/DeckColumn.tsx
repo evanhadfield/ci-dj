@@ -22,7 +22,7 @@ import {
   MAX_PRESET_TARGETS,
   type StylePreset,
 } from '../presets'
-import type { LoopState } from './useDeck'
+import type { GenerateEngine, LoopState } from './useDeck'
 import { loadDeckSettings, updateDeckSettings } from '../persistence'
 import './deck.css'
 
@@ -87,8 +87,9 @@ type DeckColumnProps = {
   onLoopPad: (slot: number) => void
   onClearLoopPad: (slot: number) => void
   onSetLoopSeconds: (seconds: number) => void
-  /** Generated pads (M18): fill the first empty slot from a prompt. */
-  onGenerateToPad: (prompt: string, kind: 'sfx' | 'loop') => void
+  /** Generated pads (M18): fill the first empty slot from a prompt,
+   * with the chosen engine and one-shot/loop behaviour. */
+  onGenerateToPad: (prompt: string, engine: GenerateEngine, oneShot: boolean) => void
   generateError: string | null
   /** Gated tempo readout (M14): null shows an honest dash. */
   bpm: number | null
@@ -133,9 +134,11 @@ export function DeckColumn({
   >(() => loadDeckSettings(deckId).targets ?? [])
   const [sampling, setSampling] = useState(false)
   const [sampleError, setSampleError] = useState<string | null>(null)
-  // Generated pads (M18): the prompt and kind for the next generation.
+  // Generated pads (M18): the prompt, engine, and behaviour for the
+  // next generation.
   const [generateDraft, setGenerateDraft] = useState('')
-  const [generateKind, setGenerateKind] = useState<'sfx' | 'loop'>('sfx')
+  const [generateEngine, setGenerateEngine] = useState<GenerateEngine>('sfx')
+  const [generateOneShot, setGenerateOneShot] = useState(true)
   // Mirrors the latest committed targets for reads after an await —
   // the async sample flow must not go stale, and must not smuggle
   // side effects into a state updater (StrictMode replays those).
@@ -167,6 +170,18 @@ export function DeckColumn({
 
   const connected = state.connection === 'open'
   const operable = isDeckOperable(state)
+  // The deck's own worker can only render while silent: playing (or
+  // primed — same pacing loop, just off air) would stall the stream.
+  const magentaBusy = generateEngine === 'magenta' && (state.playing || primed)
+  const canGenerate =
+    connected &&
+    !magentaBusy &&
+    Boolean(generateDraft.trim()) &&
+    loop.slots.some((slot) => slot.state === 'empty')
+  const fireGenerate = () => {
+    if (!canGenerate) return
+    onGenerateToPad(generateDraft, generateEngine, generateOneShot)
+  }
   const statusKey = state.switchingModel
     ? 'deck.status.loadingModel'
     : loop.active !== null && connected
@@ -670,8 +685,11 @@ export function DeckColumn({
       </div>
 
       {/* Generated pads (M18, ADR-0012): a prompt fills the first empty
-          slot — sfx one-shots overlay the deck, loops replace it like a
-          capture and share the length picker above. */}
+          slot — one-shots overlay the deck, loops replace it like a
+          capture and share the length picker above. The engine picks
+          the sound world; the deck's own Magenta worker can only
+          render while the deck is silent (a playing worker is paced
+          to its stream). */}
       <div
         className="deck__generate"
         role="group"
@@ -684,29 +702,30 @@ export function DeckColumn({
             disabled={!connected}
             onChange={(event) => setGenerateDraft(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                onGenerateToPad(generateDraft, generateKind)
-              }
+              if (event.key === 'Enter') fireGenerate()
             }}
           />
         </div>
         <Select
-          label={t('deck.generate.kind')}
-          value={generateKind}
+          label={t('deck.generate.engine')}
+          value={generateEngine}
           options={[
-            { value: 'sfx', label: t('deck.generate.kindSfx') },
+            { value: 'sfx', label: t('deck.generate.engineSfx') },
+            { value: 'music', label: t('deck.generate.engineMusic') },
+            { value: 'magenta', label: t('deck.generate.engineMagenta') },
+          ]}
+          onChange={(value) => setGenerateEngine(value as GenerateEngine)}
+        />
+        <Select
+          label={t('deck.generate.kind')}
+          value={generateOneShot ? 'oneshot' : 'loop'}
+          options={[
+            { value: 'oneshot', label: t('deck.generate.kindOneShot') },
             { value: 'loop', label: t('deck.generate.kindLoop') },
           ]}
-          onChange={(value) => setGenerateKind(value as 'sfx' | 'loop')}
+          onChange={(value) => setGenerateOneShot(value === 'oneshot')}
         />
-        <Button
-          disabled={
-            !connected ||
-            !generateDraft.trim() ||
-            !loop.slots.some((slot) => slot.state === 'empty')
-          }
-          onClick={() => onGenerateToPad(generateDraft, generateKind)}
-        >
+        <Button disabled={!canGenerate} onClick={fireGenerate}>
           {t('deck.generate.action')}
         </Button>
       </div>

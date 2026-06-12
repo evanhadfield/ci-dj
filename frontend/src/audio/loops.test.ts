@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildLoopChannel, quantiseLoopBars, quantiseLoopSeconds } from './loops'
+import {
+  buildLoopChannel,
+  generatedLoopSeconds,
+  quantiseLoopSeconds,
+} from './loops'
 
 function ramp(length: number): Float32Array {
   return Float32Array.from({ length }, (_, i) => i / length)
@@ -74,17 +78,30 @@ describe('quantiseLoopSeconds', () => {
   })
 })
 
-describe('quantiseLoopBars', () => {
-  it('snaps the requested length to the nearest whole bar count', () => {
-    // 124 bpm: bar 1.935 s; 4 s ≈ 2.07 bars → 2 bars.
-    expect(quantiseLoopBars(4, 124)).toBeCloseTo(2 * 4 * (60 / 124), 6)
+describe('generatedLoopSeconds', () => {
+  it('snaps a long-enough request to the nearest whole bar count', () => {
+    // 124 bpm: bar 1.935 s; 8 s ≈ 4.13 bars → 4 bars.
+    expect(generatedLoopSeconds(8, 124)).toBeCloseTo(4 * 4 * (60 / 124), 6)
   })
 
-  it('is exact when the length already sits on the bar grid', () => {
-    expect(quantiseLoopBars(8, 120)).toBeCloseTo(8, 6)
+  it('raises a short request to the quality floor in whole bars', () => {
+    // 134 bpm: bar 1.791 s; 4 s would be 2 bars = 3.58 s — measured
+    // garbled. The floor demands ceil(7 / 1.791) = 4 bars.
+    expect(generatedLoopSeconds(4, 134)).toBeCloseTo(4 * 4 * (60 / 134), 6)
+    expect(generatedLoopSeconds(4, 134)).toBeGreaterThanOrEqual(7)
   })
 
-  it('never quantises below one bar', () => {
-    expect(quantiseLoopBars(0.5, 120)).toBeCloseTo(2, 6)
+  it('rounding near the floor can never dip back under it', () => {
+    // 103 bpm: bar 2.33 s; 7 s = 3.004 bars — nearest-rounding alone
+    // would allow 3 bars from a slightly faster tempo to land at 6.x s.
+    const result = generatedLoopSeconds(1, 103)
+    expect(result).toBeGreaterThanOrEqual(7)
+    const bars = result / (4 * (60 / 103))
+    expect(Math.abs(bars - Math.round(bars))).toBeLessThan(1e-9)
+  })
+
+  it('applies the floor free-length when the gate is blank', () => {
+    expect(generatedLoopSeconds(2, null)).toBe(7)
+    expect(generatedLoopSeconds(8, null)).toBe(8)
   })
 })

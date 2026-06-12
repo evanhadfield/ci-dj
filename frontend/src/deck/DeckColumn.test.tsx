@@ -1018,7 +1018,7 @@ describe('DeckColumn', () => {
     )
   }
 
-  it('generates to a pad with the typed prompt and selected kind', () => {
+  it('generates with the typed prompt, chosen engine, and behaviour', () => {
     const onGenerateToPad = vi.fn()
     generateRow({ onGenerateToPad: onGenerateToPad as () => void })
 
@@ -1026,15 +1026,48 @@ describe('DeckColumn', () => {
       target: { value: 'vinyl spinback' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Generate' }))
-    expect(onGenerateToPad).toHaveBeenCalledWith('vinyl spinback', 'sfx')
+    expect(onGenerateToPad).toHaveBeenCalledWith('vinyl spinback', 'sfx', true)
 
+    fireEvent.change(screen.getByLabelText('Engine'), {
+      target: { value: 'music' },
+    })
     fireEvent.change(screen.getByLabelText('Type'), {
       target: { value: 'loop' },
     })
     fireEvent.keyDown(screen.getByLabelText('Generate prompt'), {
       key: 'Enter',
     })
-    expect(onGenerateToPad).toHaveBeenLastCalledWith('vinyl spinback', 'loop')
+    expect(onGenerateToPad).toHaveBeenLastCalledWith(
+      'vinyl spinback',
+      'music',
+      false,
+    )
+  })
+
+  it('offers Magenta only while the deck is silent', () => {
+    const onGenerateToPad = vi.fn()
+    renderPanel(
+      { connection: 'open', playing: true },
+      { onGenerateToPad: onGenerateToPad as () => void },
+    )
+    fireEvent.change(screen.getByLabelText('Generate prompt'), {
+      target: { value: 'dub chords' },
+    })
+    fireEvent.change(screen.getByLabelText('Engine'), {
+      target: { value: 'magenta' },
+    })
+    const button = screen.getByRole('button', { name: 'Generate' })
+    expect(button).toBeDisabled()
+    // Enter must respect the same gate, not sneak past the button.
+    fireEvent.keyDown(screen.getByLabelText('Generate prompt'), {
+      key: 'Enter',
+    })
+    expect(onGenerateToPad).not.toHaveBeenCalled()
+    // The Stable Audio engines stay available on a playing deck.
+    fireEvent.change(screen.getByLabelText('Engine'), {
+      target: { value: 'sfx' },
+    })
+    expect(button).toBeEnabled()
   })
 
   it('refuses to generate without a prompt or an empty slot', () => {

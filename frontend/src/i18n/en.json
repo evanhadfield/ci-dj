@@ -106,8 +106,12 @@
     "generate": {
       "title": "Generate to pad",
       "prompt": "Generate prompt",
+      "engine": "Engine",
+      "engineSfx": "SFX (Stable Audio)",
+      "engineMusic": "Music (Stable Audio)",
+      "engineMagenta": "Magenta (stopped deck)",
       "kind": "Type",
-      "kindSfx": "SFX",
+      "kindOneShot": "One-shot",
       "kindLoop": "Loop",
       "action": "Generate",
       "failed": "Generation failed: {{message}}"
