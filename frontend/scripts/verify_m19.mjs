@@ -61,23 +61,26 @@ try {
     `track composed while deck A streamed; underruns a=${underrunsAfterCompose}`,
   )
 
-  // ── Load → playback mode: clock, overview, parked transport ─────────
+  // ── Deck B streams first: a load must hand over, not pause ──────────
+  await deckB.getByLabel('Style target').fill('warm dub, deep bass')
+  await deckB.getByRole('button', { name: 'Add' }).click()
+  await deckB.getByText(/^Playing: /).waitFor({ timeout: 20_000 })
+  await deckB.getByRole('button', { name: 'Play' }).click()
+  await deckB.getByRole('button', { name: 'Stop', exact: true }).waitFor()
+  await page.waitForTimeout(3_000)
+
   await explorer
     .getByRole('button', { name: 'Load deep dub techno excursion to deck B' })
     .click()
-  await deckB.getByText('Track — paused').waitFor({ timeout: 10_000 })
+  // The rolling stream hands straight to the track — no parked gap.
+  await deckB.getByText('Track — playing').waitFor({ timeout: 10_000 })
   await deckB.getByText('deep dub techno excursion').waitFor()
+  console.log('streaming deck kept playing through the track load')
   const overview = deckB.getByRole('slider', { name: 'Track overview b' })
   await overview.waitFor()
   const positionStat = deckB
     .locator('.ui-stat', { hasText: 'Position' })
     .locator('.ui-stat__value')
-  const parked = (await positionStat.textContent()).trim()
-  console.log(`track loaded parked at ${parked}`)
-
-  // ── Transport drives the track ───────────────────────────────────────
-  await deckB.getByRole('button', { name: 'Play' }).click()
-  await deckB.getByText('Track — playing').waitFor({ timeout: 5_000 })
   await page.waitForTimeout(2_500)
   const playingPosition = (await positionStat.textContent()).trim()
   console.log(`playing: position advanced to ${playingPosition}`)
@@ -92,17 +95,18 @@ try {
   const atTop = (await positionStat.textContent()).trim()
   console.log(`seek: End → ${atEnd}, Home → ${atTop}`)
 
-  // ── Back to the live stream, no reload ───────────────────────────────
+  // ── Back to the live stream, hands-off and no reload ────────────────
+  // The track rolls again, so leaving must resume the stream by itself.
+  await deckB.getByRole('button', { name: 'Play' }).click()
+  await deckB.getByText('Track — playing').waitFor({ timeout: 5_000 })
   await explorer
     .getByRole('button', { name: 'Load Live stream to deck B' })
     .click()
-  await deckB.getByText('Connected', { exact: true }).waitFor({ timeout: 5_000 })
-  await deckB.getByLabel('Style target').waitFor()
-  await deckB.getByLabel('Style target').fill('warm dub, deep bass')
-  await deckB.getByRole('button', { name: 'Add' }).click()
-  await deckB.getByText(/^Playing: /).waitFor({ timeout: 20_000 })
-  await deckB.getByRole('button', { name: 'Play' }).click()
-  await deckB.getByRole('button', { name: 'Stop', exact: true }).waitFor()
+  await deckB.getByLabel('Style target').waitFor({ timeout: 5_000 })
+  await deckB
+    .getByRole('button', { name: 'Stop', exact: true })
+    .waitFor({ timeout: 10_000 })
+  console.log('rolling track handed straight back to the stream')
   await page.waitForTimeout(4_000)
   const underrunsFinalA = (await underruns(deckA).textContent()).trim()
   const underrunsFinalB = (await underruns(deckB).textContent()).trim()
@@ -123,10 +127,7 @@ try {
   if (underrunsAfterCompose !== '0') {
     throw new Error('deck A underran while the track composed')
   }
-  if (parked !== '0:00 / 0:30') {
-    throw new Error(`track loaded parked at "${parked}", expected 0:00 / 0:30`)
-  }
-  if (playingPosition === parked) {
+  if (playingPosition === '0:00 / 0:30') {
     throw new Error('the playhead did not advance during playback')
   }
   if (!atEnd.startsWith('0:30')) {

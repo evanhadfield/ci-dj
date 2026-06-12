@@ -972,11 +972,49 @@ describe('useDeck playback mode (M19)', () => {
     })
   })
 
-  it('leavePlayback unloads the track and returns to realtime', async () => {
+  it('leavePlayback unloads the track and returns to realtime, parked staying parked', async () => {
     const { result, channel } = await loadedDeck()
+    const sentBefore = socket(0).sent.length
     act(() => result.current.leavePlayback())
     expect(channel.unloadTrack).toHaveBeenCalled()
     expect(result.current.mode).toBe('realtime')
     expect(result.current.track).toBeNull()
+    // The track was parked, so the deck comes back stopped.
+    expect(socket(0).sent).toHaveLength(sentBefore)
+  })
+
+  it('a streaming deck keeps playing through a track load', async () => {
+    const { engine, channel } = makeFakeEngine()
+    const { result } = renderDeck(engine)
+    act(() => socket(0).serverOpen())
+    await act(() => result.current.play())
+    expect(result.current.state.playing).toBe(true)
+
+    await act(async () => {
+      await result.current.loadTrack(new ArrayBuffer(8), 'Hot Swap')
+    })
+    expect(channel.playTrack).toHaveBeenCalled()
+    expect(result.current.track).toMatchObject({
+      title: 'Hot Swap',
+      playing: true,
+    })
+  })
+
+  it('a rolling track hands straight back to the stream on leaving', async () => {
+    const { result, channel } = await loadedDeck()
+    vi.mocked(channel.getTrackStatus).mockReturnValue({
+      position: 10,
+      duration: 120,
+      playing: true,
+      ended: false,
+    })
+    const sentBefore = socket(0).sent.length
+    await act(async () => result.current.leavePlayback())
+    expect(channel.unloadTrack).toHaveBeenCalled()
+    expect(result.current.mode).toBe('realtime')
+    expect(socket(0).sent.slice(sentBefore)).toContain(
+      JSON.stringify({ type: 'play' }),
+    )
+    expect(result.current.state.playing).toBe(true)
   })
 })

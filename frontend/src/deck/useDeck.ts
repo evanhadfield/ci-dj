@@ -479,6 +479,12 @@ export function useDeck(deckId: DeckId): DeckControls {
         })
         return false
       }
+      // A rolling deck keeps rolling across a load: read it before the
+      // load replaces the channel's track and STOP parks the source.
+      const wasPlaying =
+        modeRef.current === 'playback'
+          ? (channel.getTrackStatus()?.playing ?? false)
+          : state.playing
       const decoded = await channel.loadTrack(wav)
       if (!decoded) return false
       // Park whatever was running — the live stream's worker idles
@@ -489,27 +495,32 @@ export function useDeck(deckId: DeckId): DeckControls {
       const trackTempo = trackBpm(decoded.left, decoded.right, decoded.sampleRate)
       channel.setBeatPeriod(trackTempo === null ? null : 60 / trackTempo)
       setMode('playback')
+      if (wasPlaying) channel.playTrack()
       setTrack({
         title,
         duration: decoded.duration,
         position: 0,
-        playing: false,
+        playing: wasPlaying,
         ended: false,
         bpm: trackTempo,
       })
       return true
     },
-    [ensureChannel, engine, stop, setMode],
+    [ensureChannel, engine, stop, setMode, state.playing],
   )
 
   const leavePlayback = useCallback(() => {
     if (modeRef.current !== 'playback') return
+    // A rolling track hands straight back to the stream; a parked one
+    // leaves the deck stopped, like a track load in reverse.
+    const wasPlaying = channelRef.current?.getTrackStatus()?.playing ?? false
     channelRef.current?.unloadTrack()
     setMode('realtime')
     setTrack(null)
-    // The stream returns by a normal play; measurements start over.
+    // The stream's measurements start over either way.
     resetStreamMeasurements()
-  }, [setMode, resetStreamMeasurements])
+    if (wasPlaying) void play()
+  }, [setMode, resetStreamMeasurements, play])
 
   const getTrackPeaks = useCallback(
     (buckets: number) => channelRef.current?.getTrackPeaks(buckets) ?? null,
