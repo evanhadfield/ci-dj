@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { initialDeckState, type DeckState } from '../deck/deckState'
 import type { DeckControls } from '../deck/useDeck'
-import { applyAppIntent, JOG_SEEK_SECONDS } from './appIntents'
+import {
+  applyAppIntent,
+  JOG_NUDGE_SECONDS,
+  JOG_SEEK_SECONDS,
+} from './appIntents'
 
 function fakeDeck(state: Partial<DeckState> = {}): DeckControls {
   return {
@@ -263,14 +267,44 @@ describe('applyAppIntent', () => {
     expect(playing.stop).not.toHaveBeenCalled()
   })
 
-  it('jog ticks seek a playback deck, scaled to seconds', () => {
-    const deck = playbackDeck(true)
+  it('jog ticks seek a parked track, scaled to seconds', () => {
+    const deck = playbackDeck(false)
     applyAppIntent(
       { kind: 'track_seek', deck: 'a', steps: 3 },
       decks(deck),
       noHandlers,
     )
     expect(deck.nudgeTrack).toHaveBeenCalledWith(3 * JOG_SEEK_SECONDS)
+    expect(deck.nudgeTrackPhase).not.toHaveBeenCalled()
+  })
+
+  it('jog ticks nudge phase while the track plays — the platter dual role (M20)', () => {
+    const deck = playbackDeck(true)
+    applyAppIntent(
+      { kind: 'track_seek', deck: 'a', steps: -2 },
+      decks(deck),
+      noHandlers,
+    )
+    expect(deck.nudgeTrackPhase).toHaveBeenCalledWith(-2 * JOG_NUDGE_SECONDS)
+    expect(deck.nudgeTrack).not.toHaveBeenCalled()
+  })
+
+  it('tempo slider rides the rate on a playback deck only (M20)', () => {
+    const deck = playbackDeck(true)
+    applyAppIntent(
+      { kind: 'track_rate', deck: 'a', value: 0 },
+      decks(deck),
+      noHandlers,
+    )
+    expect(deck.setTrackRate).toHaveBeenCalledWith(1.08)
+
+    const live = fakeDeck({ playing: true })
+    applyAppIntent(
+      { kind: 'track_rate', deck: 'a', value: 0 },
+      decks(live),
+      noHandlers,
+    )
+    expect(live.setTrackRate).not.toHaveBeenCalled()
   })
 
   it('a realtime deck ignores jog ticks — still no scratch concept', () => {

@@ -32,7 +32,11 @@ export type ControlIntent =
   | { kind: 'browse_tab' }
   // Jog wheel ticks (M19): relative seek on a playback deck; a
   // realtime deck ignores them (ADR-0004 — no scratch concept).
+  // While the track plays the same ticks become phase nudges (M20).
   | { kind: 'track_seek'; deck: DeckId; steps: number }
+  // Tempo sliders (M20, ADR-0014): varispeed on a playback deck,
+  // ignored on a realtime deck — ADR-0004 still bars generation tempo.
+  | { kind: 'track_rate'; deck: DeckId; value: number }
   | { kind: 'preset_load'; deck: DeckId; preset: StylePreset }
 
 export type ControlBus = {

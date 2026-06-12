@@ -75,6 +75,8 @@ function renderPanel(
         track={playback.track}
         onLeavePlayback={handlers.onLeavePlayback ?? noop}
         onSeekTrack={(handlers.onSeekTrack as (s: number) => void) ?? noop}
+        onSetTrackRate={(handlers.onSetTrackRate as (r: number) => void) ?? noop}
+        onSyncTrack={(handlers.onSyncTrack as () => boolean) ?? (() => true)}
         getTrackPeaks={() => null}
       />
     </ControlBusProvider>,
@@ -285,6 +287,8 @@ describe('DeckColumn', () => {
           track={null}
           onLeavePlayback={noop}
           onSeekTrack={noop as (s: number) => void}
+          onSetTrackRate={noop as (r: number) => void}
+          onSyncTrack={() => true}
           getTrackPeaks={() => null}
         />
       </ControlBusProvider>,
@@ -753,6 +757,8 @@ describe('DeckColumn', () => {
             track={null}
             onLeavePlayback={noop}
             onSeekTrack={noop as (s: number) => void}
+            onSetTrackRate={noop as (r: number) => void}
+            onSyncTrack={() => true}
             getTrackPeaks={() => null}
           />
         </ControlBusProvider>
@@ -860,6 +866,8 @@ describe('DeckColumn', () => {
           track={null}
           onLeavePlayback={noop}
           onSeekTrack={noop as (s: number) => void}
+          onSetTrackRate={noop as (r: number) => void}
+          onSyncTrack={() => true}
           getTrackPeaks={() => null}
         />
       </ControlBusProvider>,
@@ -1259,6 +1267,32 @@ describe('DeckColumn playback mode (M19)', () => {
   it('announces the explicit end-of-track state', () => {
     renderPlayback(aTrack({ position: 125, ended: true }))
     expect(screen.getByText('Track — ended')).toBeInTheDocument()
+  })
+
+  it('rides the tempo knob and shows the effective BPM (M20)', () => {
+    const onSetTrackRate = vi.fn()
+    renderPlayback(aTrack({ rate: 1.05 }), {
+      onSetTrackRate: onSetTrackRate as unknown as () => void,
+    })
+    // The readout is bpm × rate — SYNC must visibly do something.
+    const stat = screen.getByText('BPM').parentElement!
+    expect(stat).toHaveTextContent((132.5 * 1.05).toFixed(1))
+    fireEvent.change(screen.getByLabelText('Tempo'), {
+      target: { value: '1.02' },
+    })
+    expect(onSetTrackRate).toHaveBeenCalledWith(1.02)
+  })
+
+  it('SYNC reports an honest refusal', () => {
+    const onSyncTrack = vi.fn(() => false)
+    renderPlayback(aTrack(), {
+      onSyncTrack: onSyncTrack as unknown as () => void,
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sync' }))
+    expect(onSyncTrack).toHaveBeenCalled()
+    expect(
+      screen.getByText('Sync refused — tempo out of range'),
+    ).toBeInTheDocument()
   })
 
   it('carries its own exit back to the live stream', () => {

@@ -89,7 +89,8 @@
     "record": "Record",
     "stopRecording": "Stop recording",
     "recordingFor": "REC {{time}}",
-    "recordingError": "Recording failed: {{message}}"
+    "recordingError": "Recording failed: {{message}}",
+    "phase": "Beat phase"
   },
   "deck": {
     "title": "Deck {{id}}",
@@ -175,7 +176,10 @@
       "title": "Track",
       "overview": "Track overview {{id}}",
       "time": "{{position}} / {{duration}}",
-      "backToLive": "Back to live"
+      "backToLive": "Back to live",
+      "tempo": "Tempo",
+      "sync": "Sync",
+      "syncRefused": "Sync refused — tempo out of range"
     },
     "health": {
       "buffer": "Buffer",

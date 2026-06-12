@@ -97,3 +97,20 @@ export function trackPeaks(
   }
   return { min, max }
 }
+
+/** Map the FLX4 tempo slider (14-bit, 0..1) onto the varispeed range.
+ * Pioneer convention: slider down = faster, so low MIDI values are
+ * the fast end — confirm orientation on the device (checklist). */
+export function tempoSliderToRate(value: number): number {
+  return clampRate(1 + (0.5 - value) * 2 * TRACK_RATE_RANGE)
+}
+
+/** Phase offset between two beat clocks, wrapped to [-0.5, 0.5)
+ * beats — what the phase meter shows. */
+export function phaseOffsetBeats(
+  a: { periodSeconds: number; beatAtContext: number },
+  b: { periodSeconds: number; beatAtContext: number },
+): number {
+  const raw = (a.beatAtContext - b.beatAtContext) / b.periodSeconds
+  return ((((raw % 1) + 1) % 1) + 0.5) % 1 - 0.5
+}

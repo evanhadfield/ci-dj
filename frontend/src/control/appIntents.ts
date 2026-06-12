@@ -1,5 +1,6 @@
 import type { DeckId } from '../audio/engine'
 import { FX_KINDS } from '../audio/fx'
+import { tempoSliderToRate } from '../audio/track'
 import { isDeckOperable } from '../deck/deckState'
 import type { DeckControls } from '../deck/useDeck'
 import type { ControlIntent } from './bus'
@@ -14,6 +15,9 @@ export type AppIntentHandlers = {
  * playhead and a spin jumps bars — verified by hand on the device
  * (the M19 checklist). */
 export const JOG_SEEK_SECONDS = 0.5
+/** Phase slip per jog tick while the track plays (M20): a platter
+ * drag, milliseconds at a time — verified by feel on the device. */
+export const JOG_NUDGE_SECONDS = 0.01
 
 /** The App-owned slice of the intent union: transport, deck prep, channel
  * volume/EQ/cue, the crossfader, and the cue mix. Style and record intents
@@ -93,7 +97,21 @@ export function applyAppIntent(
       // Jog ticks only mean something on a playback deck; the live
       // stream keeps its no-scratch stance (ADR-0004).
       if (deck.mode !== 'playback') return
-      deck.nudgeTrack(intent.steps * JOG_SEEK_SECONDS)
+      // The dual role of a real platter (M20): playing = phase nudge,
+      // paused = seek.
+      if (deck.track?.playing) {
+        deck.nudgeTrackPhase(intent.steps * JOG_NUDGE_SECONDS)
+      } else {
+        deck.nudgeTrack(intent.steps * JOG_SEEK_SECONDS)
+      }
+      return
+    }
+    case 'track_rate': {
+      const deck = decks[intent.deck]
+      // Varispeed is a playback parameter; a realtime deck ignores
+      // the slider — ADR-0004 stands for generation.
+      if (deck.mode !== 'playback') return
+      deck.setTrackRate(tempoSliderToRate(intent.value))
       return
     }
     case 'crossfade':

@@ -95,6 +95,10 @@ function ccBuilder(
   const deck = CC_DECK[status]
   if (deck) {
     switch (cc) {
+      // Tempo slider (M20): mapped at last — varispeed is a playback
+      // parameter, not generation tempo (ADR-0014 vs ADR-0004).
+      case 0x00:
+        return (value) => ({ kind: 'track_rate', deck, value })
       case 0x13:
         return (value) => ({ kind: 'volume', deck, value })
       case 0x07:

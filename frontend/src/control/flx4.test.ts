@@ -343,6 +343,26 @@ describe('createFlx4Translator', () => {
       },
     )
 
+    it.each([
+      [0xb0, 'a'],
+      [0xb1, 'b'],
+    ] as const)(
+      'tempo slider (status 0x%s) is a 14-bit track_rate (M20)',
+      (status, deck) => {
+        const translate = createFlx4Translator()
+        expect(translate([status, 0x00, 0x40])).toEqual({
+          kind: 'track_rate',
+          deck,
+          value: (0x40 << 7) / 16383,
+        })
+        expect(translate([status, 0x20, 0x10])).toEqual({
+          kind: 'track_rate',
+          deck,
+          value: ((0x40 << 7) | 0x10) / 16383,
+        })
+      },
+    )
+
     it('jog ticks never pollute the 14-bit MSB cache', () => {
       const translate = createFlx4Translator()
       translate([0xb0, 0x21, 0x41]) // jog tick
@@ -418,13 +438,13 @@ describe('createFlx4Translator', () => {
   })
 
   describe('unmapped traffic', () => {
-    // CUE (0x90 note 0x0C) left this list in M10: it now preps a deck.
-    // SHIFT (note 0x3F) is consumed as a modifier since M12 but still
-    // emits no intent of its own.
+    // CUE (0x90 note 0x0C) left this list in M10: it now preps a
+    // deck; the jog wheels left in M19 (seek) and the tempo sliders
+    // in M20 (varispeed). SHIFT (note 0x3F) is consumed as a modifier
+    // since M12 but still emits no intent of its own.
     it('ignores controls the map deliberately leaves out', () => {
       const translate = createFlx4Translator()
-      expect(translate([0xb0, 0x00, 0x40])).toBeNull() // tempo slider
-      expect(translate([0xb0, 0x21, 0x40])).toBeNull() // jog wheel
+      expect(translate([0xb0, 0x21, 0x40])).toBeNull() // jog centre tick
       expect(translate([0x90, 0x3f, PRESS])).toBeNull() // SHIFT (modifier)
       expect(translate([0xf8, 0x00, 0x00])).toBeNull() // clock-ish noise
     })

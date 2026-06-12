@@ -12,6 +12,7 @@ import { Button } from '../ui/Button'
 import { Knob } from '../ui/Knob'
 import { LevelMeter } from '../ui/LevelMeter'
 import { Select } from '../ui/Select'
+import { PhaseMeter } from '../ui/PhaseMeter'
 import { Slider } from '../ui/Slider'
 import { Stat } from '../ui/Stat'
 import { VerticalFader } from '../ui/VerticalFader'
@@ -41,6 +42,9 @@ type MixerStripProps = {
   cueDevice: AudioOutputDevice | null
   /** Rejects when the device can't take the feed (e.g. unplugged). */
   onCueDeviceChange: (device: AudioOutputDevice | null) => Promise<void>
+  /** Beat-phase offset between the decks (M20), null while either
+   * clock is unconfident — the meter blanks. */
+  getPhaseOffset: () => number | null
 }
 
 function downloadWav(blob: Blob) {
@@ -70,6 +74,7 @@ export function MixerStrip({
   onCueMixChange,
   cueDevice,
   onCueDeviceChange,
+  getPhaseOffset,
 }: MixerStripProps) {
   const { t } = useTranslation()
   const engine = useAudioEngine()
@@ -230,6 +235,8 @@ export function MixerStrip({
           </div>
         ))}
       </div>
+
+      <PhaseMeter label={t('mixer.phase')} getOffset={getPhaseOffset} />
 
       <div className="mixer__crossfade">
         <span className="mixer__edge">{t('mixer.deckA')}</span>

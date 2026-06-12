@@ -16,6 +16,9 @@ type TrackOverviewProps = {
   /** Playhead position and track length, in seconds. */
   position: number
   duration: number
+  /** Beatgrid ticks (M20), drawn only while a grid is confident —
+   * downbeats heavier. Null draws no ticks. */
+  grid: { bpm: number; firstBeatSeconds: number } | null
   accent: 'a' | 'b'
   disabled?: boolean
   onSeek: (seconds: number) => void
@@ -29,6 +32,7 @@ export function TrackOverview({
   peaks,
   position,
   duration,
+  grid,
   accent,
   disabled,
   onSeek,
@@ -55,7 +59,23 @@ export function TrackOverview({
       const half = Math.max(1, (amplitude * HEIGHT * 0.92) / 2)
       context.fillRect(x, HEIGHT / 2 - half, 1, half * 2)
     }
-  }, [peaks, accent])
+    // Beatgrid ticks (M20): top edge, downbeats heavier — only while
+    // the grid is confident (null grid, no ticks; the honesty rule).
+    if (grid && duration > 0) {
+      const tick =
+        getComputedStyle(canvas).getPropertyValue('--color-text-muted').trim() ||
+        '#888888'
+      context.fillStyle = tick
+      const period = 60 / grid.bpm
+      const first = grid.firstBeatSeconds % period
+      let beat = Math.round((grid.firstBeatSeconds - first) / period)
+      for (let t = first; t < duration; t += period, beat++) {
+        const x = Math.round((t / duration) * WIDTH)
+        const downbeat = ((beat % 4) + 4) % 4 === 0
+        context.fillRect(x, 0, 1, downbeat ? 12 : 6)
+      }
+    }
+  }, [peaks, accent, grid, duration])
 
   function seekFromPointer(event: React.PointerEvent<HTMLDivElement>) {
     if (disabled || duration <= 0) return

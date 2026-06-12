@@ -273,6 +273,52 @@
   opacity: 0.4;
 }
 
+/* ---------- phase meter (M20) ---------- */
+
+.ui-phasemeter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ui-phasemeter__label {
+  font: var(--silkscreen);
+  letter-spacing: var(--silkscreen-spacing);
+  text-transform: uppercase;
+  color: var(--color-text-silkscreen);
+}
+
+.ui-phasemeter__track {
+  position: relative;
+  height: var(--space-2);
+  border-radius: var(--radius-s);
+  background: var(--color-surface-inset);
+  box-shadow: var(--inset-border);
+}
+
+.ui-phasemeter__centre {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-text-muted);
+}
+
+.ui-phasemeter__needle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: 1px;
+  background: var(--color-led-ok);
+}
+
+.ui-phasemeter--blank .ui-phasemeter__track {
+  opacity: 0.4;
+}
+
 /* ---------- level meter ---------- */
 
 .ui-levelmeter {

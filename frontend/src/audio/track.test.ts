@@ -6,7 +6,9 @@ import {
   clampOffset,
   clampRate,
   NUDGE_BEND_FRACTION,
+  phaseOffsetBeats,
   positionAt,
+  tempoSliderToRate,
   trackPeaks,
   TRACK_RATE_RANGE,
 } from './track'
@@ -131,5 +133,33 @@ describe('trackPeaks', () => {
     const { min, max } = trackPeaks(new Float32Array(0), new Float32Array(0), 3)
     expect(Array.from(min)).toEqual([0, 0, 0])
     expect(Array.from(max)).toEqual([0, 0, 0])
+  })
+})
+
+describe('tempoSliderToRate', () => {
+  it('maps centre to unity and the ends to the envelope edges', () => {
+    expect(tempoSliderToRate(0.5)).toBeCloseTo(1)
+    expect(tempoSliderToRate(0)).toBeCloseTo(1 + TRACK_RATE_RANGE)
+    expect(tempoSliderToRate(1)).toBeCloseTo(1 - TRACK_RATE_RANGE)
+  })
+})
+
+describe('phaseOffsetBeats', () => {
+  const clock = (beatAtContext: number, periodSeconds = 0.5) => ({
+    beatAtContext,
+    periodSeconds,
+  })
+
+  it('is zero when the beats coincide on the lattice', () => {
+    expect(phaseOffsetBeats(clock(10), clock(10))).toBeCloseTo(0)
+    expect(phaseOffsetBeats(clock(12.5), clock(10))).toBeCloseTo(0)
+  })
+
+  it('reports a late deck as a positive fraction of a beat', () => {
+    expect(phaseOffsetBeats(clock(10.1), clock(10))).toBeCloseTo(0.2)
+  })
+
+  it('wraps to the nearest direction', () => {
+    expect(phaseOffsetBeats(clock(10.45), clock(10))).toBeCloseTo(-0.1)
   })
 })

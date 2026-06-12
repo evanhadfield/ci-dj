@@ -29,6 +29,7 @@ import {
 } from './persistence'
 import type { StylePreset } from './presets'
 import { combinedRamWarning } from './ramWarning'
+import { phaseOffsetBeats } from './audio/track'
 import { handleShortcutKey } from './shortcuts'
 
 function App() {
@@ -222,6 +223,40 @@ function App() {
     [deckA, deckB],
   )
 
+  // Beat-matching (M20, ADR-0014): SYNC matches a track deck to the
+  // other deck's effective tempo — gated stream BPM, or grid BPM ×
+  // rate when the other side is a track too. Phase is read for the
+  // meter from whichever clock each deck honestly has.
+  const effectiveBpm = useCallback(
+    (deck: typeof deckA) =>
+      deck.mode === 'playback'
+        ? deck.track?.bpm != null
+          ? deck.track.bpm * deck.track.rate
+          : null
+        : deck.bpm,
+    [],
+  )
+  const handleSyncA = useCallback(
+    () => deckA.syncTrack(effectiveBpm(deckB)),
+    [deckA, deckB, effectiveBpm],
+  )
+  const handleSyncB = useCallback(
+    () => deckB.syncTrack(effectiveBpm(deckA)),
+    [deckA, deckB, effectiveBpm],
+  )
+  const getPhaseOffset = useCallback(() => {
+    const aPlayback = deckA.mode === 'playback'
+    const bPlayback = deckB.mode === 'playback'
+    if (!aPlayback && !bPlayback) return null
+    const clockOf = (deck: typeof deckA) =>
+      deck.mode === 'playback' ? deck.getTrackBeat() : deck.getLiveBeat()
+    const a = clockOf(deckA)
+    const b = clockOf(deckB)
+    if (!a || !b) return null
+    // The track side reads against the other deck; A wins ties.
+    return aPlayback ? phaseOffsetBeats(a, b) : phaseOffsetBeats(b, a)
+  }, [deckA, deckB])
+
   const midi = useMidi()
   const {
     status: midiStatus,
@@ -378,6 +413,8 @@ function App() {
           track={deckA.track}
           onLeavePlayback={deckA.leavePlayback}
           onSeekTrack={deckA.seekTrack}
+          onSetTrackRate={deckA.setTrackRate}
+          onSyncTrack={handleSyncA}
           getTrackPeaks={deckA.getTrackPeaks}
         />
         <div className="app__center">
@@ -389,6 +426,7 @@ function App() {
             onCueMixChange={handleCueMix}
             cueDevice={cueDevice}
             onCueDeviceChange={handleCueDevice}
+            getPhaseOffset={getPhaseOffset}
           />
         </div>
         <DeckColumn
@@ -419,6 +457,8 @@ function App() {
           track={deckB.track}
           onLeavePlayback={deckB.leavePlayback}
           onSeekTrack={deckB.seekTrack}
+          onSetTrackRate={deckB.setTrackRate}
+          onSyncTrack={handleSyncB}
           getTrackPeaks={deckB.getTrackPeaks}
         />
       </div>
