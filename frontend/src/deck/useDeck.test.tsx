@@ -85,6 +85,8 @@ function makeFakeEngine(overrides: Partial<AudioEngine> = {}) {
     pauseTrack: vi.fn(),
     seekTrack: vi.fn(),
     getTrackStatus: vi.fn(() => null),
+    setTrackRate: vi.fn(),
+    nudgeTrackPhase: vi.fn(),
     getTrackPeaks: vi.fn(() => null),
     unloadTrack: vi.fn(),
     getLevel: vi.fn(() => 0),
@@ -964,6 +966,7 @@ describe('useDeck playback mode (M19)', () => {
       duration: 120,
       playing: true,
       ended: false,
+      rate: 1,
     })
     act(() => void vi.advanceTimersByTime(250))
     expect(result.current.track).toMatchObject({
@@ -1021,6 +1024,7 @@ describe('useDeck playback mode (M19)', () => {
       duration: 120,
       playing: true,
       ended: false,
+      rate: 1,
     })
     act(() => result.current.nudgeTrack(2.5))
     expect(channel.seekTrack).toHaveBeenCalledWith(12.5)
@@ -1033,6 +1037,7 @@ describe('useDeck playback mode (M19)', () => {
       duration: 120,
       playing: true,
       ended: false,
+      rate: 1,
     })
     const sentBefore = socket(0).sent.length
     await act(async () => result.current.leavePlayback())

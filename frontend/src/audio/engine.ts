@@ -38,7 +38,14 @@ import {
   LIMITER_THRESHOLD_DB,
 } from './master'
 import { interleaveChannels, MIN_STYLE_SAMPLE_SECONDS } from './styleSample'
-import { clampOffset, positionAt, trackPeaks, type TrackTransport } from './track'
+import {
+  bendConsumed,
+  bendPlan,
+  clampOffset,
+  positionAt,
+  trackPeaks,
+  type TrackTransport,
+} from './track'
 import { encodeWav, floatToInt16 } from './wav'
 
 export type DeckId = 'a' | 'b'
@@ -107,13 +114,21 @@ export type DeckChannel = {
   /** Jump the playhead; whether it was playing is preserved. */
   seekTrack: (seconds: number) => void
   /** Playhead snapshot, or null with no track loaded. The end is an
-   * explicit state: silence with the position parked (ADR-0013). */
+   * explicit state: silence with the position parked (ADR-0013).
+   * `rate` is the base varispeed rate (M20), bends excluded. */
   getTrackStatus: () => {
     position: number
     duration: number
     playing: boolean
     ended: boolean
+    rate: number
   } | null
+  /** Varispeed (M20, ADR-0014): the playback rate the tempo control
+   * set; the transport re-anchors so the playhead stays exact. */
+  setTrackRate: (rate: number) => void
+  /** Phase nudge: slip the playhead by `seconds` via a stepped rate
+   * bend (the platter-drag metaphor) — never a click. Playing only. */
+  nudgeTrackPhase: (seconds: number) => void
   /** Static min/max envelope of the loaded track for the overview. */
   getTrackPeaks: (
     buckets: number,
@@ -492,7 +507,65 @@ export function createAudioEngine(): AudioEngine {
       let trackBuffer: AudioBuffer | null = null
       let trackSource: AudioBufferSourceNode | null = null
       let trackTransport: TrackTransport = { state: 'paused', offset: 0 }
+      // Varispeed (M20, ADR-0014): the base rate the tempo control
+      // sets, plus one stepped bend at a time for phase nudges. The
+      // transport re-anchors on every rate change, so positionAt
+      // stays exact even mid-bend.
+      let trackRate = 1
+      let pendingSlip = 0
+      let bentRate: number | null = null
+      let bendStartedAt = 0
+      let bendTimer: ReturnType<typeof setTimeout> | null = null
+      function setSourceRate(rate: number) {
+        const now = bus.context.currentTime
+        if (trackTransport.state === 'playing' && trackBuffer) {
+          trackTransport = {
+            state: 'playing',
+            offset: positionAt(trackTransport, now, trackBuffer.duration),
+            startedAt: now,
+            rate,
+          }
+        }
+        if (trackSource) trackSource.playbackRate.value = rate
+      }
+      function clearBendState() {
+        if (bendTimer) {
+          clearTimeout(bendTimer)
+          bendTimer = null
+        }
+        pendingSlip = 0
+        bentRate = null
+      }
+      function applyBend() {
+        const now = bus.context.currentTime
+        if (bendTimer) {
+          clearTimeout(bendTimer)
+          bendTimer = null
+        }
+        // Settle what an interrupted bend already slipped before
+        // planning the remainder.
+        if (bentRate !== null) {
+          pendingSlip -= bendConsumed(now - bendStartedAt, trackRate, bentRate)
+          bentRate = null
+        }
+        if (trackTransport.state !== 'playing' || Math.abs(pendingSlip) < 5e-4) {
+          pendingSlip = 0
+          setSourceRate(trackRate)
+          return
+        }
+        const plan = bendPlan(pendingSlip, trackRate)
+        bentRate = plan.rate
+        bendStartedAt = now
+        setSourceRate(plan.rate)
+        // setTimeout jitter is harmless: at a 5% bend, ±20ms of timer
+        // error is ±1ms of slip, and the settle above keeps the books.
+        bendTimer = setTimeout(() => {
+          bendTimer = null
+          applyBend()
+        }, plan.durationSeconds * 1000)
+      }
       function stopTrackSource() {
+        clearBendState()
         const source = trackSource
         if (!source) return
         trackSource = null
@@ -506,6 +579,8 @@ export function createAudioEngine(): AudioEngine {
         if (!buffer) return
         const source = bus.context.createBufferSource()
         source.buffer = buffer
+        // Rate carries over across pause/seek/source restarts.
+        source.playbackRate.value = trackRate
         source.connect(liveGain)
         source.onended = () => {
           source.disconnect()
@@ -520,6 +595,7 @@ export function createAudioEngine(): AudioEngine {
           state: 'playing',
           offset,
           startedAt: bus.context.currentTime,
+          rate: trackRate,
         }
       }
 
@@ -766,7 +842,21 @@ export function createAudioEngine(): AudioEngine {
             duration: trackBuffer.duration,
             playing: trackTransport.state === 'playing',
             ended: trackTransport.state === 'ended',
+            // The base rate the tempo control set — a transient nudge
+            // bend deliberately doesn't show here.
+            rate: trackRate,
           }
+        },
+        setTrackRate(rate) {
+          if (!Number.isFinite(rate) || rate <= 0) return
+          clearBendState()
+          trackRate = rate
+          setSourceRate(rate)
+        },
+        nudgeTrackPhase(seconds) {
+          if (trackTransport.state !== 'playing') return
+          pendingSlip += seconds
+          applyBend()
         },
         getTrackPeaks(buckets) {
           if (!trackBuffer) return null
@@ -780,6 +870,7 @@ export function createAudioEngine(): AudioEngine {
           stopTrackSource()
           trackBuffer = null
           trackTransport = { state: 'paused', offset: 0 }
+          trackRate = 1
         },
         getLevel() {
           return rmsLevel(analyser, analyserBuffer)

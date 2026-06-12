@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import { clampOffset, positionAt, trackPeaks } from './track'
+import {
+  bendConsumed,
+  bendPlan,
+  clampOffset,
+  clampRate,
+  NUDGE_BEND_FRACTION,
+  positionAt,
+  trackPeaks,
+  TRACK_RATE_RANGE,
+} from './track'
 
 describe('positionAt', () => {
   it('holds the parked offset while paused', () => {
@@ -8,17 +17,78 @@ describe('positionAt', () => {
   })
 
   it('advances with context time while playing', () => {
-    const transport = { state: 'playing', offset: 10, startedAt: 50 } as const
+    const transport = {
+      state: 'playing',
+      offset: 10,
+      startedAt: 50,
+      rate: 1,
+    } as const
     expect(positionAt(transport, 53.25, 60)).toBe(13.25)
   })
 
+  it('advances at the varispeed rate (M20)', () => {
+    const transport = {
+      state: 'playing',
+      offset: 10,
+      startedAt: 50,
+      rate: 1.05,
+    } as const
+    expect(positionAt(transport, 52, 60)).toBeCloseTo(12.1)
+  })
+
   it('clamps to the track end — a source that ran past its stop never reads beyond', () => {
-    const transport = { state: 'playing', offset: 55, startedAt: 0 } as const
+    const transport = {
+      state: 'playing',
+      offset: 55,
+      startedAt: 0,
+      rate: 1,
+    } as const
     expect(positionAt(transport, 30, 60)).toBe(60)
   })
 
   it('parks at the end once ended', () => {
     expect(positionAt({ state: 'ended', offset: 60 }, 999, 60)).toBe(60)
+  })
+})
+
+describe('clampRate', () => {
+  it('passes rates inside the varispeed range', () => {
+    expect(clampRate(1.05)).toBe(1.05)
+  })
+
+  it('clamps to the ±8% envelope and sends garbage to unity', () => {
+    expect(clampRate(1.5)).toBe(1 + TRACK_RATE_RANGE)
+    expect(clampRate(0.5)).toBe(1 - TRACK_RATE_RANGE)
+    expect(clampRate(Number.NaN)).toBe(1)
+  })
+})
+
+describe('bend arithmetic', () => {
+  it('plans a forward slip as a faster bend held long enough', () => {
+    const plan = bendPlan(0.05, 1)
+    expect(plan.rate).toBeCloseTo(1 + NUDGE_BEND_FRACTION)
+    // 50ms of slip at a 5% bend takes one second.
+    expect(plan.durationSeconds).toBeCloseTo(1)
+  })
+
+  it('plans a backward slip as a slower bend', () => {
+    const plan = bendPlan(-0.025, 1)
+    expect(plan.rate).toBeCloseTo(1 - NUDGE_BEND_FRACTION)
+    expect(plan.durationSeconds).toBeCloseTo(0.5)
+  })
+
+  it('scales the bend with the base rate so slip stays exact under varispeed', () => {
+    const plan = bendPlan(0.05, 1.08)
+    expect(plan.rate).toBeCloseTo(1.08 * (1 + NUDGE_BEND_FRACTION))
+    expect(plan.durationSeconds).toBeCloseTo(0.05 / (1.08 * NUDGE_BEND_FRACTION))
+  })
+
+  it('settles what an interrupted bend already consumed', () => {
+    const plan = bendPlan(0.05, 1)
+    // Half the duration in: half the slip is consumed.
+    expect(
+      bendConsumed(plan.durationSeconds / 2, 1, plan.rate),
+    ).toBeCloseTo(0.025)
   })
 })
 
