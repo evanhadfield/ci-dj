@@ -769,11 +769,11 @@ describe('DeckColumn', () => {
             onSetTrackRate={noop as (r: number) => void}
             onSyncTrack={() => 'synced' as const}
             onHotCuePad={noop}
-          onClearHotCue={noop}
-          onLoopIn={noop}
-          onLoopOut={noop}
-          onLoopExit={noop}
-          getTrackPeaks={() => null}
+            onClearHotCue={noop}
+            onLoopIn={noop}
+            onLoopOut={noop}
+            onLoopExit={noop}
+            getTrackPeaks={() => null}
           />
         </ControlBusProvider>
       </StrictMode>,
@@ -1387,5 +1387,17 @@ describe('DeckColumn playback mode (M19)', () => {
     renderPlayback(aTrack({ loop: { start: 64, end: 66 } }))
     expect(screen.queryByText(/-beat loop/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Exit loop' })).toBeEnabled()
+  })
+
+  it('claims no beat length for a tail-clamped fractional loop either', () => {
+    // quantisedLoop clamps the end into the track: 0.1s at 120 BPM is
+    // not "0 beats" — a count the region doesn't have stays unsaid.
+    renderPlayback(
+      aTrack({
+        grid: { bpm: 120, firstBeatSeconds: 0 },
+        loop: { start: 124.8, end: 124.9 },
+      }),
+    )
+    expect(screen.queryByText(/-beat loop/)).not.toBeInTheDocument()
   })
 })

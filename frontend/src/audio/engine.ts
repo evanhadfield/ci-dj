@@ -45,7 +45,7 @@ import {
   clampRate,
   foldIntoLoop,
   MAX_PENDING_SLIP_SECONDS,
-  MIN_TRACK_LOOP_SECONDS,
+  planLoopSet,
   positionAt,
   trackPeaks,
   type TrackLoop,
@@ -894,44 +894,32 @@ export function createAudioEngine(): AudioEngine {
         },
         setTrackLoop(start, end) {
           if (!trackBuffer) return
-          if (!Number.isFinite(start) || !Number.isFinite(end)) return
-          // Callers quantise upstream; the boundary still refuses a
-          // region that cannot honestly loop.
-          if (
-            start < 0 ||
-            end > trackBuffer.duration ||
-            end - start < MIN_TRACK_LOOP_SECONDS
-          ) {
+          // The decision is pure (planLoopSet, unit-tested); this
+          // boundary only executes it. The position is the audible
+          // playhead, folded through the OLD loop if one was active.
+          const plan = planLoopSet(
+            trackTransport.state,
+            trackPositionNow(),
+            start,
+            end,
+            trackBuffer.duration,
+          )
+          if (plan.action === 'refuse') return
+          trackLoop = { start, end }
+          if (plan.action === 'restart') {
+            stopTrackSource()
+            startTrackSource(plan.offset)
             return
           }
-          // The audible playhead, folded through the OLD loop if one
-          // was active — the anchor for everything below.
-          const position = trackPositionNow()
-          trackLoop = { start, end }
-          if (trackTransport.state === 'playing') {
-            // A playhead at/past the new end (a late OUT snapping
-            // backwards): restart inside the region rather than
-            // trusting the wrap-on-reach edge (ADR-0015).
-            if (position >= end) {
-              stopTrackSource()
-              startTrackSource(foldIntoLoop(position, trackLoop))
-              return
-            }
-            // Re-anchor so the linear raw history can't fight the
-            // new fold (the rate-change precedent, ADR-0014).
+          if (plan.action === 'reanchor' && trackTransport.state === 'playing') {
             trackTransport = {
               state: 'playing',
-              offset: position,
+              offset: plan.offset,
               startedAt: bus.context.currentTime,
               rate: trackTransport.rate,
             }
-          } else if (trackTransport.state === 'paused' && position >= end) {
-            // A parked playhead past the region folds in now, so a
-            // later resume starts deterministically inside it.
-            trackTransport = {
-              state: 'paused',
-              offset: foldIntoLoop(position, trackLoop),
-            }
+          } else if (plan.action === 'park') {
+            trackTransport = { state: 'paused', offset: plan.offset }
           }
           if (trackSource) {
             trackSource.loop = true

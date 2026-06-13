@@ -1369,4 +1369,33 @@ describe('useDeck beat clocks (M20)', () => {
     expect(result.current.track!.loop).toBeNull()
     expect(result.current.track!.pendingLoopIn).toBeNull()
   })
+
+  it('transport CUE drops the loop everywhere — engine, mirror, pending IN', async () => {
+    // CUE's back-to-top is a seek (ADR-0013 + ADR-0015): the loop
+    // must not survive on screen while playback runs linear.
+    const { result, status } = await griddedDeck(8.1)
+    act(() => result.current.loopIn())
+    status.position = 10.2
+    act(() => result.current.loopOut())
+    expect(result.current.track!.loop).not.toBeNull()
+
+    act(() => result.current.loopIn())
+    await act(() => result.current.prime())
+    expect(result.current.track!.loop).toBeNull()
+    expect(result.current.track!.pendingLoopIn).toBeNull()
+  })
+
+  it('the position poll mirrors an engine-side loop drop within a tick', async () => {
+    const { result, channel, status } = await griddedDeck(8.1)
+    act(() => result.current.loopIn())
+    status.position = 10.2
+    act(() => result.current.loopOut())
+    expect(result.current.track!.loop).not.toBeNull()
+
+    // The engine drops the loop behind the hook's back (any internal
+    // seek path); the 250 ms poll must catch up without help.
+    vi.mocked(channel.clearTrackLoop).getMockImplementation()?.()
+    act(() => void vi.advanceTimersByTime(250))
+    expect(result.current.track!.loop).toBeNull()
+  })
 })

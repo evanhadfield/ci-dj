@@ -78,6 +78,18 @@ function formatTrackTime(seconds: number): string {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`
 }
 
+/** The loop's length in beats — only when the region truly is a whole
+ * number of them (a tail-clamped loop is not "0 beats"; claiming a
+ * count it doesn't have breaks the honesty rule). */
+function wholeBeatLoop(
+  loop: { start: number; end: number },
+  grid: { bpm: number },
+): number | null {
+  const beats = (loop.end - loop.start) / (60 / grid.bpm)
+  const whole = Math.round(beats)
+  return whole >= 1 && Math.abs(beats - whole) < 0.01 ? whole : null
+}
+
 type DeckColumnProps = {
   deckId: DeckId
   state: DeckState
@@ -635,16 +647,15 @@ export function DeckColumn({
             >
               {t('deck.track.loopExit')}
             </Button>
-            {track.loop && track.grid && (
-              <span className="deck__loop-length">
-                {t('deck.track.loopBeats', {
-                  beats: Math.round(
-                    (track.loop.end - track.loop.start) /
-                      (60 / track.grid.bpm),
-                  ),
-                })}
-              </span>
-            )}
+            {track.loop &&
+              track.grid &&
+              wholeBeatLoop(track.loop, track.grid) !== null && (
+                <span className="deck__loop-length">
+                  {t('deck.track.loopBeats', {
+                    beats: wholeBeatLoop(track.loop, track.grid),
+                  })}
+                </span>
+              )}
           </div>
         </Panel>
       ) : (

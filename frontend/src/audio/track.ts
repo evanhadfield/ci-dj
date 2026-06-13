@@ -124,6 +124,50 @@ export function snapToGrid(
   return grid.firstBeatSeconds + k * period
 }
 
+/** What setting a loop does to the transport (M21, ADR-0015) — the
+ * decision is pure so the spec-edge branches the architecture review
+ * demanded are unit-tested, with the engine only executing them:
+ * - `refuse`: a region that cannot honestly loop, or a deck parked at
+ *   its end (nothing is rolling; a stored loop would contradict the
+ *   parked readout).
+ * - `restart` (playing, playhead at/past the new end — a late OUT
+ *   snapping backwards): restart the source inside the region rather
+ *   than trusting the wrap-on-reach edge.
+ * - `reanchor` (playing): pin the anchor on the audible position so
+ *   the linear raw history can't fight the new fold.
+ * - `park` (paused past the end): fold the parked offset in, so a
+ *   later resume starts deterministically inside the region.
+ * - `apply` (paused, inside): just set it. */
+export type LoopSetPlan =
+  | { action: 'refuse' }
+  | { action: 'restart'; offset: number }
+  | { action: 'reanchor'; offset: number }
+  | { action: 'park'; offset: number }
+  | { action: 'apply' }
+
+export function planLoopSet(
+  state: TrackTransport['state'],
+  position: number,
+  start: number,
+  end: number,
+  duration: number,
+): LoopSetPlan {
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return { action: 'refuse' }
+  if (start < 0 || end > duration || end - start < MIN_TRACK_LOOP_SECONDS) {
+    return { action: 'refuse' }
+  }
+  if (state === 'ended') return { action: 'refuse' }
+  const loop = { start, end }
+  if (state === 'playing') {
+    return position >= end
+      ? { action: 'restart', offset: foldIntoLoop(position, loop) }
+      : { action: 'reanchor', offset: position }
+  }
+  return position >= end
+    ? { action: 'park', offset: foldIntoLoop(position, loop) }
+    : { action: 'apply' }
+}
+
 /** Build the loop region from IN and OUT presses: both ends snapped
  * while a grid is confident, the end then owing at least one beat
  * (an OUT on the IN's beat means the next one — a loop must loop).

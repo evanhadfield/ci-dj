@@ -558,14 +558,37 @@ export function useDeck(deckId: DeckId): DeckControls {
     dispatch({ type: 'play_requested' })
   }, [ensureChannel, engine, send, setPrimed, resetStreamMeasurements])
 
+  const seekTrack = useCallback((seconds: number) => {
+    if (modeRef.current !== 'playback') return
+    channelRef.current?.seekTrack(seconds)
+    // A seek exits the loop at the engine (ADR-0015); a pending IN
+    // dies with it — a region spanning a jump would be an accident.
+    pendingLoopInRef.current = null
+    const status = channelRef.current?.getTrackStatus()
+    if (!status) return
+    setTrack(
+      (current) =>
+        current && {
+          ...current,
+          position: status.position,
+          playing: status.playing,
+          ended: status.ended,
+          loop: status.loop,
+          pendingLoopIn: null,
+        },
+    )
+  }, [])
+
   /** Start generating off air: like play(), but muted on the master so
    * the prep is only audible over the cue tap (M10 transport CUE). */
   const prime = useCallback(async () => {
     // Transport CUE on a track deck: return to the top, parked — the
-    // deck-prep semantics, adapted (ADR-0013).
+    // deck-prep semantics, adapted (ADR-0013). Through the hook's
+    // seek so the loop exit and the pending IN reach the UI mirror
+    // (ADR-0015 — every seek path, no ghost regions).
     if (modeRef.current === 'playback') {
       channelRef.current?.pauseTrack()
-      channelRef.current?.seekTrack(0)
+      seekTrack(0)
       return
     }
     if (primedRef.current) return
@@ -585,7 +608,7 @@ export function useDeck(deckId: DeckId): DeckControls {
     setPrimed(true)
     send({ type: 'play' })
     dispatch({ type: 'play_requested' })
-  }, [ensureChannel, engine, send, setPrimed, resetStreamMeasurements])
+  }, [ensureChannel, engine, send, setPrimed, resetStreamMeasurements, seekTrack])
 
   const stop = useCallback(() => {
     // A playback deck's STOP pauses the track; running pads stop with
@@ -721,27 +744,6 @@ export function useDeck(deckId: DeckId): DeckControls {
     (buckets: number) => channelRef.current?.getTrackPeaks(buckets) ?? null,
     [],
   )
-
-  const seekTrack = useCallback((seconds: number) => {
-    if (modeRef.current !== 'playback') return
-    channelRef.current?.seekTrack(seconds)
-    // A seek exits the loop at the engine (ADR-0015); a pending IN
-    // dies with it — a region spanning a jump would be an accident.
-    pendingLoopInRef.current = null
-    const status = channelRef.current?.getTrackStatus()
-    if (!status) return
-    setTrack(
-      (current) =>
-        current && {
-          ...current,
-          position: status.position,
-          playing: status.playing,
-          ended: status.ended,
-          loop: status.loop,
-          pendingLoopIn: null,
-        },
-    )
-  }, [])
 
   const nudgeTrack = useCallback(
     (seconds: number) => {
@@ -936,6 +938,10 @@ export function useDeck(deckId: DeckId): DeckControls {
             position: status.position,
             playing: status.playing,
             ended: status.ended,
+            // The loop mirrors generically: any engine-side exit
+            // (every seek path, ADR-0015) reaches the UI within a
+            // poll tick — no ghost regions.
+            loop: status.loop,
           },
       )
     }, 250)

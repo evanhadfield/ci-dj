@@ -35,7 +35,8 @@ const BEAT_FX_STATUSES = [0x94, 0x95]
 const PLAY_NOTE = 0x0b
 const RECORD_NOTE = 0x47
 /** The LOOP section (M21): IN / OUT / RELOOP-EXIT per the Mixxx FLX4
- * chart — monitor-verified like every bank. */
+ * chart — confirm with the monitor (the tempo slider taught us
+ * charts lie); the M21 checklist holds that box. */
 const LOOP_IN_NOTE = 0x10
 const LOOP_OUT_NOTE = 0x11
 const LOOP_EXIT_NOTE = 0x4d

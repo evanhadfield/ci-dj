@@ -11,6 +11,7 @@ import {
   MIN_TRACK_LOOP_SECONDS,
   NUDGE_BEND_FRACTION,
   phaseOffsetBeats,
+  planLoopSet,
   positionAt,
   quantisedLoop,
   snapToGrid,
@@ -185,6 +186,45 @@ describe('quantisedLoop', () => {
       end: 59.1,
     })
     expect(quantisedLoop(59.1, 59.2, null, 59.1)).toBeNull()
+  })
+})
+
+describe('planLoopSet', () => {
+  it('refuses what cannot honestly loop', () => {
+    expect(planLoopSet('playing', 5, Number.NaN, 10, 60)).toEqual({
+      action: 'refuse',
+    })
+    expect(planLoopSet('playing', 5, -1, 10, 60)).toEqual({ action: 'refuse' })
+    expect(planLoopSet('playing', 5, 8, 61, 60)).toEqual({ action: 'refuse' })
+    expect(planLoopSet('playing', 5, 8, 8.01, 60)).toEqual({ action: 'refuse' })
+  })
+
+  it('refuses on a deck parked at its end — nothing is rolling', () => {
+    expect(planLoopSet('ended', 60, 8, 10, 60)).toEqual({ action: 'refuse' })
+  })
+
+  it('restarts inside the region when a late OUT lands behind the playhead', () => {
+    const plan = planLoopSet('playing', 10.3, 8, 10, 60)
+    expect(plan.action).toBe('restart')
+    expect((plan as { offset: number }).offset).toBeCloseTo(8.3)
+  })
+
+  it('re-anchors a playing transport on the audible position', () => {
+    expect(planLoopSet('playing', 9, 8, 10, 60)).toEqual({
+      action: 'reanchor',
+      offset: 9,
+    })
+  })
+
+  it('parks a paused playhead past the region inside it', () => {
+    expect(planLoopSet('paused', 30, 8, 10, 60)).toEqual({
+      action: 'park',
+      offset: 8,
+    })
+  })
+
+  it('just applies for a paused playhead at or before the region', () => {
+    expect(planLoopSet('paused', 5, 8, 10, 60)).toEqual({ action: 'apply' })
   })
 })
 
