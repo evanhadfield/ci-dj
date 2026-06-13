@@ -247,6 +247,59 @@ releases cleanly; quantise degrades honestly without a grid; new intents
 and mapping rows unit-tested; verified on the device against a
 checklist.
 
+## M23 — Beat loops: one-press lengths, halve and double
+
+**Status: 🔶 built (2026-06-13), pending verification.** A thin control
+layer over M21's loop engine ([ADR-0016](adr/0016-beat-loops-length-scaling-over-the-loop-region.md),
+architecture-reviewed before building): two pure functions —
+`beatLoopRegion` (grid-required, N beats from the snapped playhead) and
+`resizeLoop` (length-scaled ×½/×2 anchored on the IN, no re-snap so clean
+fractions stay exact) — feed the existing `setTrackLoop`→`planLoopSet`
+path, so a resize that leaves the playhead outside the region gets M21's
+restart for free. Three deck controls (`beatLoop` set-only, `halveLoop`,
+`doubleLoop`), the `track_beat_loop`/`track_loop_halve`/`track_loop_double`
+intents, and an on-screen 4-beat + ½×/2× row whose readout now names
+clean fractions (½, ¼). The FLX4 maps at last, **bytes measured on the
+device**: the 4 BEAT/EXIT button (`0x4D` — the byte M21 had read as
+RELOOP/EXIT) toggles set/exit in dispatch, and CUE/LOOP CALL ◄/►
+(`0x51`/`0x53`) halve/double. Gate green and the
+beat-loop math, the resize-past-playhead restart, the toggle, and the
+translator bytes unit-tested. The scripted real-audio check is
+`verify_m23.mjs`; the device half awaits
+[`m23-hardware-checklist.md`](m23-hardware-checklist.md).
+
+**Goal:** loops set in one move, not two. A single press drops a
+beat-locked loop of a known length at the playhead; halve and double walk
+the standard ladder (… 1, 2, 4, 8, 16 …) without re-cueing — the working
+DJ's loop, not the manual IN→OUT carpentry M21 shipped.
+
+Scope, ordered by risk:
+
+1. **Beat loop.** One press sets a loop of N whole beats from the playhead
+   (snapped to the grid), default 4. Grid-required by nature: no confident
+   grid, no beat loop (the M14 consumer rule) — the control sits inert on a
+   gridless track (the Jazz case), where M21's free IN→OUT loop stays the
+   only way in.
+2. **Halve / double.** With a loop active, ×½ / ×2 its length anchored on
+   the IN — start fixed, end moves. Pure length-scaling, not a re-snap: a
+   beat-aligned loop stays on the grid under ×½/×2 by construction, and
+   re-quantising would only corrupt a clean fraction. Clamped to a sane
+   range — a beat-fraction floor, the track end as ceiling (a double that
+   would overrun refuses rather than truncating). Halving past the playhead
+   re-anchors through the same restart rule.
+3. **Surface + hardware.** An on-screen 4-beat button with ×½ / ×2 beside
+   M21's IN/OUT/EXIT and the live beat count (M21 already labels a
+   whole-beat loop); on the FLX4, the **4 BEAT/EXIT** button (one-press
+   4-beat loop and release) and the **CUE/LOOP CALL ◄ / ►** buttons (halve
+   / double) — bytes from the Mixxx chart, monitor-verified. The close-up's
+   loop wash already shows the result.
+
+**Exit criteria:** a one-press 4-beat loop locks on the grid and folds
+seamlessly; halve and double resize it on the beat with no click and no
+drift, refusing only what can't honestly fit; the control is inert, not
+wrong, without a grid; new intents and mapping rows unit-tested; verified
+on the device against a checklist.
+
 ## Later (not committed)
 
 Ideas parked deliberately — each would get its own ADR if picked up:

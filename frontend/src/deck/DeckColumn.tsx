@@ -81,13 +81,29 @@ function formatTrackTime(seconds: number): string {
 /** The loop's length in beats — only when the region truly is a whole
  * number of them (a tail-clamped loop is not "0 beats"; claiming a
  * count it doesn't have breaks the honesty rule). */
-function wholeBeatLoop(
+/** Clean beat fractions a halve can produce (M23), longest glyph first. */
+const LOOP_BEAT_FRACTIONS: ReadonlyArray<[number, string]> = [
+  [0.5, '½'],
+  [0.25, '¼'],
+  [0.125, '⅛'],
+]
+
+/** A loop's length for the readout: a whole beat count, or a clean
+ * fraction (½, ¼, ⅛) once halved (M23). Null without a confident grid
+ * or for a region that isn't a clean beat length — the honesty rule
+ * keeps a count off a free or tail-clamped loop. */
+function loopBeatLabel(
   loop: { start: number; end: number },
-  grid: { bpm: number },
-): number | null {
+  grid: { bpm: number } | null,
+): string | null {
+  if (!grid) return null
   const beats = (loop.end - loop.start) / (60 / grid.bpm)
   const whole = Math.round(beats)
-  return whole >= 1 && Math.abs(beats - whole) < 0.01 ? whole : null
+  if (whole >= 1 && Math.abs(beats - whole) < 0.01) return String(whole)
+  for (const [value, glyph] of LOOP_BEAT_FRACTIONS) {
+    if (Math.abs(beats - value) < 0.01) return glyph
+  }
+  return null
 }
 
 type DeckColumnProps = {
@@ -144,6 +160,11 @@ type DeckColumnProps = {
   onLoopIn: () => void
   onLoopOut: () => void
   onLoopExit: () => void
+  /** Beat loops (M23): a one-press N-beat loop, and halve/double of the
+   * active loop. */
+  onBeatLoop: (beats: number) => void
+  onHalveLoop: () => void
+  onDoubleLoop: () => void
   getTrackPeaks: (
     buckets: number,
   ) => { min: Float32Array; max: Float32Array } | null
@@ -183,6 +204,9 @@ export function DeckColumn({
   onLoopIn,
   onLoopOut,
   onLoopExit,
+  onBeatLoop,
+  onHalveLoop,
+  onDoubleLoop,
   getTrackPeaks,
 }: DeckColumnProps) {
   const { t } = useTranslation()
@@ -645,15 +669,27 @@ export function DeckColumn({
             >
               {t('deck.track.loopExit')}
             </Button>
-            {track.loop &&
-              track.grid &&
-              wholeBeatLoop(track.loop, track.grid) !== null && (
-                <span className="deck__loop-length">
-                  {t('deck.track.loopBeats', {
-                    beats: wholeBeatLoop(track.loop, track.grid),
-                  })}
-                </span>
-              )}
+            {track.loop && loopBeatLabel(track.loop, track.grid) !== null && (
+              <span className="deck__loop-length">
+                {t('deck.track.loopBeats', {
+                  beats: loopBeatLabel(track.loop, track.grid),
+                })}
+              </span>
+            )}
+          </div>
+          {/* Beat loops (M23, ADR-0016): a one-press 4-beat loop
+              (grid-required, so inert without one), then halve/double
+              the active region. */}
+          <div className="deck__track-row">
+            <Button disabled={!track.grid} onClick={() => onBeatLoop(4)}>
+              {t('deck.track.beatLoop')}
+            </Button>
+            <Button disabled={!track.loop} onClick={onHalveLoop}>
+              {t('deck.track.loopHalve')}
+            </Button>
+            <Button disabled={!track.loop} onClick={onDoubleLoop}>
+              {t('deck.track.loopDouble')}
+            </Button>
           </div>
         </Panel>
       ) : (

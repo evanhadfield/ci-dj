@@ -21,8 +21,10 @@ import { createLoudnessTracker, trimDbFor } from '../audio/master'
 import { STYLE_SAMPLE_SECONDS } from '../audio/styleSample'
 import { useAudioEngine } from '../audio/engineContext'
 import {
+  beatLoopRegion,
   clampRate,
   quantisedLoop,
+  resizeLoop,
   snapToGrid,
   type TrackLoop,
 } from '../audio/track'
@@ -211,6 +213,13 @@ export type DeckControls = {
   loopIn: () => void
   loopOut: () => void
   loopExit: () => void
+  /** Beat loops (M23, ADR-0016): set a `beats`-long loop at the playhead
+   * (grid-required; a no-op without one), and halve/double an active
+   * loop's length. Set-only — the FLX4's 4 BEAT/EXIT toggle is in
+   * dispatch, exiting via loopExit. */
+  beatLoop: (beats: number) => void
+  halveLoop: () => void
+  doubleLoop: () => void
   /** The track's beat clock (playing + grid required), for the meter. */
   getTrackBeat: () => BeatClock | null
   /** The live stream's beat clock at the speakers (gated BPM, a
@@ -844,6 +853,37 @@ export function useDeck(deckId: DeckId): DeckControls {
     )
   }, [])
 
+  const beatLoop = useCallback((beats: number) => {
+    if (modeRef.current !== 'playback') return
+    const status = channelRef.current?.getTrackStatus()
+    if (!status) return
+    const grid = trackMetaRef.current?.grid ?? null
+    const region = beatLoopRegion(status.position, beats, grid, status.duration)
+    // Grid-required: a beat loop on a gridless track is a no-op, not a guess.
+    if (!region) return
+    channelRef.current?.setTrackLoop(region.start, region.end)
+    // A fresh region drops any half-armed IN, like loopOut and seekTrack.
+    pendingLoopInRef.current = null
+    const loop = channelRef.current?.getTrackStatus()?.loop ?? null
+    setTrack((current) => current && { ...current, loop, pendingLoopIn: null })
+  }, [])
+
+  // Halve/double scale the active loop's length (M23) — pure arithmetic,
+  // no grid needed; the engine's planLoopSet re-anchors a playhead the
+  // resize leaves outside the region, the same path loopOut uses.
+  const resizeTrackLoop = useCallback((factor: number) => {
+    if (modeRef.current !== 'playback') return
+    const status = channelRef.current?.getTrackStatus()
+    if (!status?.loop) return
+    const region = resizeLoop(status.loop, factor, status.duration)
+    if (!region) return
+    channelRef.current?.setTrackLoop(region.start, region.end)
+    const loop = channelRef.current?.getTrackStatus()?.loop ?? null
+    setTrack((current) => current && { ...current, loop })
+  }, [])
+  const halveLoop = useCallback(() => resizeTrackLoop(0.5), [resizeTrackLoop])
+  const doubleLoop = useCallback(() => resizeTrackLoop(2), [resizeTrackLoop])
+
   const syncTrack = useCallback(
     (targetBpm: number | null): SyncResult => {
       const bpm = trackMetaRef.current?.bpm ?? null
@@ -1269,6 +1309,9 @@ export function useDeck(deckId: DeckId): DeckControls {
     loopIn,
     loopOut,
     loopExit,
+    beatLoop,
+    halveLoop,
+    doubleLoop,
     getTrackBeat,
     getLiveBeat,
     getZoomSource,

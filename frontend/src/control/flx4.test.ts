@@ -100,11 +100,34 @@ describe('createFlx4Translator', () => {
           kind: 'track_loop_out',
           deck,
         })
-        expect(translate([status, 0x4d, PRESS])).toEqual({
-          kind: 'track_loop_exit',
+        expect(translate([status, 0x10, RELEASE])).toBeNull()
+      },
+    )
+
+    it.each([
+      [0x90, 'a'],
+      [0x91, 'b'],
+    ] as const)(
+      'beat-loop controls on %s drive deck %s (M23, bytes measured)',
+      (status, deck) => {
+        const translate = createFlx4Translator()
+        // CUE/LOOP CALL ◄ / ► halve and double the active loop.
+        expect(translate([status, 0x51, PRESS])).toEqual({
+          kind: 'track_loop_halve',
           deck,
         })
-        expect(translate([status, 0x10, RELEASE])).toBeNull()
+        expect(translate([status, 0x53, PRESS])).toEqual({
+          kind: 'track_loop_double',
+          deck,
+        })
+        // The "4 BEAT/EXIT" button is note 0x4D — the byte M21 read as
+        // RELOOP/EXIT — now the beat-loop toggle (set/exit in dispatch).
+        expect(translate([status, 0x4d, PRESS])).toEqual({
+          kind: 'track_beat_loop',
+          deck,
+          beats: 4,
+        })
+        expect(translate([status, 0x4d, RELEASE])).toBeNull()
       },
     )
 

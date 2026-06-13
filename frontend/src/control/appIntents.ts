@@ -143,9 +143,25 @@ export function applyAppIntent(
       if (deck.mode === 'playback') deck.loopOut()
       return
     }
-    case 'track_loop_exit': {
+    case 'track_beat_loop': {
       const deck = decks[intent.deck]
-      if (deck.mode === 'playback') deck.loopExit()
+      if (deck.mode !== 'playback') return
+      // The FLX4 "4 BEAT/EXIT" is one button (ADR-0016): exit a running
+      // loop, else drop a fresh beat loop. Exit reuses loopExit so the
+      // release path stays single. The on-screen 4-beat button calls
+      // beatLoop directly (set-only) — it has its own EXIT.
+      if (deck.track?.loop) deck.loopExit()
+      else deck.beatLoop(intent.beats)
+      return
+    }
+    case 'track_loop_halve': {
+      const deck = decks[intent.deck]
+      if (deck.mode === 'playback') deck.halveLoop()
+      return
+    }
+    case 'track_loop_double': {
+      const deck = decks[intent.deck]
+      if (deck.mode === 'playback') deck.doubleLoop()
       return
     }
     case 'crossfade':
