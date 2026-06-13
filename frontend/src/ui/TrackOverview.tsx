@@ -16,13 +16,8 @@ type TrackOverviewProps = {
   /** Playhead position and track length, in seconds. */
   position: number
   duration: number
-  /** Beatgrid ticks (M20), drawn only while a grid is confident —
-   * downbeats heavier. Null draws no ticks. */
-  grid: { bpm: number; firstBeatSeconds: number } | null
-  /** Hot cue markers (M21): filled slots draw numbered-by-position
-   * flags in the deck accent. */
-  cues?: (number | null)[]
-  /** The active loop region, shaded in the deck accent. */
+  /** The active loop region, shaded in the deck accent. Beat ticks and
+   * hot cues live on the BeatView's close-up now, not here (M22). */
   loop?: { start: number; end: number } | null
   accent: 'a' | 'b'
   disabled?: boolean
@@ -37,8 +32,6 @@ export function TrackOverview({
   peaks,
   position,
   duration,
-  grid,
-  cues,
   loop,
   accent,
   disabled,
@@ -76,40 +69,7 @@ export function TrackOverview({
       const half = Math.max(1, (amplitude * HEIGHT * 0.92) / 2)
       context.fillRect(x, HEIGHT / 2 - half, 1, half * 2)
     }
-    // Beatgrid ticks (M20): top edge, only while the grid is
-    // confident (null grid, no ticks; the honesty rule). Density-
-    // aware: a 2-minute track is ~270 beats across 480 px — drawing
-    // every beat fuses into a solid band (found on the device), so
-    // ticks step up to downbeats, then bars-of-4, until they fit.
-    if (grid && duration > 0) {
-      const tick =
-        getComputedStyle(canvas).getPropertyValue('--color-wave-beat').trim() ||
-        '#ff4757'
-      context.fillStyle = tick
-      const period = 60 / grid.bpm
-      const pxPerBeat = (period / duration) * WIDTH
-      const stride = pxPerBeat >= 6 ? 1 : pxPerBeat >= 1.5 ? 4 : 16
-      const first = grid.firstBeatSeconds % period
-      let beat = 0
-      for (let t = first; t < duration; t += period, beat++) {
-        if (beat % stride !== 0) continue
-        const x = Math.round((t / duration) * WIDTH)
-        const heavy = beat % (stride * 4) === 0
-        context.fillRect(x, 0, heavy ? 2 : 1, heavy ? 14 : 7)
-      }
-    }
-    // Hot cue flags (M21): bottom edge, deck accent — distinct from
-    // the grid-red beat ticks along the top.
-    if (cues && duration > 0) {
-      context.fillStyle = trace
-      for (const cue of cues) {
-        if (cue === null) continue
-        const x = Math.round((cue / duration) * WIDTH)
-        context.fillRect(x, HEIGHT - 16, 2, 16)
-        context.fillRect(x, HEIGHT - 16, 6, 5)
-      }
-    }
-  }, [peaks, accent, grid, cues, loop, duration])
+  }, [peaks, accent, loop, duration])
 
   function seekFromPointer(event: React.PointerEvent<HTMLDivElement>) {
     if (disabled || duration <= 0) return

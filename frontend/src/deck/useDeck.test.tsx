@@ -1307,6 +1307,20 @@ describe('useDeck beat clocks (M20)', () => {
     expect(result.current.track!.cues[2]).toBeNull()
   })
 
+  it('the zoom source carries filled hot cues in the playhead’s hop domain (M21)', async () => {
+    const { result } = await griddedDeck(10.1)
+    // Nothing captured yet: the close-up has no cues to draw.
+    expect(result.current.getZoomSource()!.cues).toEqual([])
+
+    act(() => result.current.hotCuePad(2))
+    const cue = result.current.track!.cues[2]!
+    const source = result.current.getZoomSource()!
+    // Only the one filled slot, and in the same hop units as the
+    // playhead — so the strip lines the marker up against the centre.
+    expect(source.cues).toHaveLength(1)
+    expect(source.cues[0] / source.playheadHop).toBeCloseTo(cue / 10.1, 6)
+  })
+
   it('cue capture runs free without a grid — no fabricated lattice', async () => {
     const { engine, channel } = makeFakeEngine()
     vi.mocked(channel.getTrackStatus).mockReturnValue({

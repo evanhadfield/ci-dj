@@ -9,16 +9,17 @@ loop-section bytes no script can confirm (ADR-0015).
 ## Setup
 
 - [ ] FLX4 connected (green LED), a composed techno track loaded on
-      deck B and playing, ticks visible on the overview (a grid).
+      deck B and playing, the beat view showing (any layout but Off),
+      red beat ticks visible on its close-up (a grid).
 
 ## Hot cues (HOT CUE pad bank)
 
 - [ ] An **empty pad** sets a cue at the playhead — the pad LED
-      lights, a flag appears at the overview's bottom edge, and with
-      a grid the flag sits on a tick (quantise).
+      lights, a mint cue marker appears on the beat-view close-up, and
+      with a grid it sits on a beat tick (quantise).
 - [ ] A **filled pad** jumps there while the track plays — no click,
       music continues from the cue.
-- [ ] **SHIFT + pad** clears the cue: LED dark, flag gone. (The
+- [ ] **SHIFT + pad** clears the cue: LED dark, marker gone. (The
       shift pad layer `0x98`/`0x9A`, the M13-measured firmware
       habit — if nothing happens, the monitor shows what SHIFT+pad
       actually sends.)

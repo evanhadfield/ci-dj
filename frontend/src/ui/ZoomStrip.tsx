@@ -21,6 +21,8 @@ type ZoomStripSource = {
   playheadHop: number
   realSecondsPerHop: number
   beat: { periodHops: number; anchorHop: number } | null
+  /** Filled hot cues in hop units (M21), in the playhead's domain. */
+  cues: number[]
 }
 
 type ZoomStripProps = {
@@ -52,6 +54,7 @@ export function ZoomStrip({ label, accent, vertical, getSource }: ZoomStripProps
     const mid = colour('--color-wave-mid', '#e0a33c')
     const high = colour('--color-wave-high', '#e8edf2')
     const marks = colour('--color-wave-beat', '#ff4757')
+    const cueColour = colour('--color-cue', '#26de81')
     const playhead = colour(`--color-deck-${accent}`, '#ffffff')
     const scratch = {
       low: new Float32Array(MAX_HOPS),
@@ -124,6 +127,18 @@ export function ZoomStrip({ label, accent, vertical, getSource }: ZoomStripProps
           context.fillRect(Math.round(x), 0, heavy ? 3 : 2, HEIGHT)
         }
         context.globalAlpha = 1
+      }
+      // Hot cues (M21): a mint flag tab over a faint full-height stem —
+      // the tab names it a cue (never the red beat marks), the stem lets
+      // you line a cue up against the centre playhead as you scrub onto it.
+      for (const cueHop of source.cues) {
+        if (cueHop < fromHop || cueHop >= fromHop + hops) continue
+        const x = Math.round((cueHop - fromHop) * pxPerHop)
+        context.fillStyle = cueColour
+        context.globalAlpha = 0.5
+        context.fillRect(x, 0, 2, HEIGHT)
+        context.globalAlpha = 1
+        context.fillRect(x, 0, 8, 6)
       }
       // The playhead sits mid-strip; the audio scrolls beneath it.
       context.fillStyle = playhead

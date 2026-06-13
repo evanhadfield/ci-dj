@@ -215,6 +215,10 @@ to the second while playing; a 9-beat IN→OUT loop folded the playhead
 3× with seam and position agreeing; EXIT released past the boundary.
 The device half awaits [`m21-hardware-checklist.md`](m21-hardware-checklist.md)
 (pad LEDs, the audible seam, the chart-interpolated LOOP bytes).
+A follow-up moved the cue markers and the beat ticks off the
+TrackOverview onto the M22 beat-view close-up — easier to read while
+working a deck; the overview keeps the loop-region shading and the
+playhead.
 
 **Goal:** on a playback deck, pads mean *position*. The HOT CUE bank —
 style-target snaps on a realtime deck — becomes what its label says, and
@@ -224,14 +228,16 @@ Scope, ordered by risk:
 
 1. **Hot cues.** HOT CUE pads on a playback deck: an empty pad sets a
    cue at the playhead, a filled pad jumps to it, SHIFT+pad clears —
-   LEDs truthful, markers drawn on the overview. Quantised to the M20
-   grid when confident, free when not (the M14 consumer rule).
+   LEDs truthful, markers drawn on the beat-view close-up. Quantised to
+   the M20 grid when confident, free when not (the M14 consumer rule).
    Session-only like every captured artefact.
 2. **In/out loops.** A beat-quantised loop on the track via the buffer
    source's native `loopStart`/`loopEnd`; in/out/exit controls on screen
    and on the FLX4 **LOOP section** (unmapped since M7 — bytes from the
    Mixxx chart, monitor-verified like every bank).
-3. **UI.** Cue markers and the loop region shaded on the TrackOverview.
+3. **UI.** The loop region shaded on the TrackOverview; the cue markers
+   and beat ticks on the beat-view close-up (moved there in a follow-up
+   for a tighter working view).
 
 **Exit criteria:** set and jump cues from the pads with truthful LEDs
 while the track plays; a 4-beat loop locks seamlessly on the grid and

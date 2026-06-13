@@ -562,8 +562,6 @@ export function DeckColumn({
             peaks={trackPeaksData}
             position={track.position}
             duration={track.duration}
-            grid={track.grid}
-            cues={track.cues}
             loop={track.loop}
             accent={deckId}
             onSeek={onSeekTrack}

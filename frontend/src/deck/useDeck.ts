@@ -112,13 +112,15 @@ export type BeatClock = { periodSeconds: number; beatAtContext: number }
 
 /** One deck's feed for the zoom view (M22): hop-indexed band
  * energies, the playhead in hop units, the wall-time span of a hop
- * on this deck's display (track hops shrink under varispeed), and
- * the beat lattice when the deck's clock is confident. */
+ * on this deck's display (track hops shrink under varispeed), the
+ * beat lattice when the deck's clock is confident, and the filled hot
+ * cues in hop units (M21) — empty for a live deck, which has none. */
 export type ZoomSource = {
   bands: BandSource
   playheadHop: number
   realSecondsPerHop: number
   beat: { periodHops: number; anchorHop: number } | null
+  cues: number[]
 }
 
 /** SYNC's verdict (M20): refusals name their reason so the UI never
@@ -886,6 +888,11 @@ export function useDeck(deckId: DeckId): DeckControls {
               anchorHop: grid.firstBeatSeconds / hopSeconds,
             }
           : null,
+        // Filled hot cues, track seconds → hops, in the same domain as
+        // the playhead so the strip lines them up exactly (M21).
+        cues: trackCuesRef.current
+          .filter((cue): cue is number => cue !== null)
+          .map((cue) => cue / hopSeconds),
       }
     }
     const stats = statsRef.current
@@ -908,6 +915,8 @@ export function useDeck(deckId: DeckId): DeckControls {
             anchorHop: clock.anchorFrame / BAND_HOP_FRAMES,
           }
         : null,
+      // Hot cues are a playback artefact (ADR-0015); a live deck has none.
+      cues: [],
     }
   }, [engine, bandScroller])
 
