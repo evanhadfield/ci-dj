@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  beatLoopRegion,
   BEND_CATCH_UP_SECONDS,
   bendConsumed,
   bendPlan,
@@ -14,6 +15,7 @@ import {
   planLoopSet,
   positionAt,
   quantisedLoop,
+  resizeLoop,
   snapToGrid,
   tempoSliderToRate,
   trackPeaks,
@@ -189,6 +191,68 @@ describe('quantisedLoop', () => {
   })
 })
 
+describe('beatLoopRegion', () => {
+  const grid = { bpm: 120, firstBeatSeconds: 0 }
+
+  it('sets N whole beats from the snapped playhead', () => {
+    // 8.1 s snaps to beat 16 (8.0 s); four beats at 120 BPM is 2 s.
+    expect(beatLoopRegion(8.1, 4, grid, 60)).toEqual({ start: 8, end: 10 })
+  })
+
+  it('is inert without a grid — a beat loop is grid-defined', () => {
+    expect(beatLoopRegion(8.1, 4, null, 60)).toBeNull()
+  })
+
+  it('refuses a non-positive beat count', () => {
+    expect(beatLoopRegion(8, 0, grid, 60)).toBeNull()
+  })
+
+  it('clamps the end into the track, refusing a degenerate tail', () => {
+    // Four beats would overrun a 59 s track — the region clamps to the end.
+    expect(beatLoopRegion(58.1, 4, grid, 59)).toEqual({ start: 58, end: 59 })
+    // Snapped onto the last beat, nothing honest is left to loop.
+    expect(beatLoopRegion(58.9, 4, grid, 59)).toBeNull()
+  })
+})
+
+describe('resizeLoop', () => {
+  it('halves and doubles, anchored on the IN', () => {
+    expect(resizeLoop({ start: 8, end: 10 }, 0.5, 60)).toEqual({
+      start: 8,
+      end: 9,
+    })
+    expect(resizeLoop({ start: 8, end: 10 }, 2, 60)).toEqual({
+      start: 8,
+      end: 12,
+    })
+  })
+
+  it('keeps a clean beat fraction exact — no re-snap (M23)', () => {
+    // A one-beat loop halved is half a beat, not dragged back to a whole.
+    expect(resizeLoop({ start: 8, end: 8.5 }, 0.5, 60)).toEqual({
+      start: 8,
+      end: 8.25,
+    })
+  })
+
+  it('needs no grid — scaling a free loop is honest arithmetic', () => {
+    expect(resizeLoop({ start: 8.5, end: 10.5 }, 0.5, 60)).toEqual({
+      start: 8.5,
+      end: 9.5,
+    })
+  })
+
+  it('refuses a double that would overrun the track', () => {
+    expect(resizeLoop({ start: 8, end: 10 }, 2, 11)).toBeNull()
+  })
+
+  it('refuses a halve below the honest minimum', () => {
+    expect(
+      resizeLoop({ start: 8, end: 8 + MIN_TRACK_LOOP_SECONDS }, 0.5, 60),
+    ).toBeNull()
+  })
+})
+
 describe('planLoopSet', () => {
   it('refuses what cannot honestly loop', () => {
     expect(planLoopSet('playing', 5, Number.NaN, 10, 60)).toEqual({
@@ -207,6 +271,15 @@ describe('planLoopSet', () => {
     const plan = planLoopSet('playing', 10.3, 8, 10, 60)
     expect(plan.action).toBe('restart')
     expect((plan as { offset: number }).offset).toBeCloseTo(8.3)
+  })
+
+  it('restarts when a halve pulls the end behind the playhead (M23)', () => {
+    // A 4-beat loop (0–2s) halved to 2 beats (0–1s) while the playhead
+    // is audibly at 1.5s: resize feeds the new region through the same
+    // path, and the restart rule re-fires inside it at the fold.
+    const plan = planLoopSet('playing', 1.5, 0, 1, 60)
+    expect(plan.action).toBe('restart')
+    expect((plan as { offset: number }).offset).toBeCloseTo(0.5)
   })
 
   it('re-anchors a playing transport on the audible position', () => {

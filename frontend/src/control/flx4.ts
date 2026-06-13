@@ -40,6 +40,14 @@ const RECORD_NOTE = 0x47
 const LOOP_IN_NOTE = 0x10
 const LOOP_OUT_NOTE = 0x11
 const LOOP_EXIT_NOTE = 0x4d
+/** Beat loops (M23, ADR-0016): CUE/LOOP CALL ◄ / ► halve and double the
+ * active loop (`loop_halve`/`loop_double` in the Mixxx FLX4 chart), and
+ * SHIFT + IN/4BEAT drops a 4-beat auto loop. The ◄/► bytes are from the
+ * chart; the 4-beat gesture rides the shifted IN button and is the least
+ * certain — the M23 checklist confirms all three on the monitor. */
+const LOOP_HALVE_NOTE = 0x51
+const LOOP_DOUBLE_NOTE = 0x53
+const BEAT_LOOP_BEATS = 4
 export const CHANNEL_CUE_NOTE = 0x54
 export const TRANSPORT_CUE_NOTE = 0x0c
 /** SHIFT is a software modifier (ADR-0008): the firmware reports press
@@ -155,13 +163,24 @@ function buttonIntent(
     return { kind: 'deck_prep', deck: playDeck }
   }
   if (playDeck && note === LOOP_IN_NOTE) {
-    return { kind: 'track_loop_in', deck: playDeck }
+    // The IN/4BEAT button: SHIFT drops a 4-beat auto loop (M23), bare
+    // press arms a manual loop start (M21). The 4-beat intent toggles
+    // in dispatch, so this one mapping both sets and exits.
+    return shift[playDeck]
+      ? { kind: 'track_beat_loop', deck: playDeck, beats: BEAT_LOOP_BEATS }
+      : { kind: 'track_loop_in', deck: playDeck }
   }
   if (playDeck && note === LOOP_OUT_NOTE) {
     return { kind: 'track_loop_out', deck: playDeck }
   }
   if (playDeck && note === LOOP_EXIT_NOTE) {
     return { kind: 'track_loop_exit', deck: playDeck }
+  }
+  if (playDeck && note === LOOP_HALVE_NOTE) {
+    return { kind: 'track_loop_halve', deck: playDeck }
+  }
+  if (playDeck && note === LOOP_DOUBLE_NOTE) {
+    return { kind: 'track_loop_double', deck: playDeck }
   }
   const padDeck = PAD_DECK[status]
   if (padDeck && note < PAD_COUNT) {

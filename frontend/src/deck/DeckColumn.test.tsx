@@ -83,6 +83,9 @@ function renderPanel(
         onLoopIn={handlers.onLoopIn ?? noop}
         onLoopOut={handlers.onLoopOut ?? noop}
         onLoopExit={handlers.onLoopExit ?? noop}
+        onBeatLoop={(handlers.onBeatLoop as (b: number) => void) ?? noop}
+        onHalveLoop={handlers.onHalveLoop ?? noop}
+        onDoubleLoop={handlers.onDoubleLoop ?? noop}
         getTrackPeaks={() => null}
       />
     </ControlBusProvider>,
@@ -299,6 +302,9 @@ describe('DeckColumn', () => {
           onLoopIn={noop}
           onLoopOut={noop}
           onLoopExit={noop}
+          onBeatLoop={noop}
+          onHalveLoop={noop}
+          onDoubleLoop={noop}
           getTrackPeaks={() => null}
         />
       </ControlBusProvider>,
@@ -773,6 +779,9 @@ describe('DeckColumn', () => {
             onLoopIn={noop}
             onLoopOut={noop}
             onLoopExit={noop}
+            onBeatLoop={noop}
+            onHalveLoop={noop}
+            onDoubleLoop={noop}
             getTrackPeaks={() => null}
           />
         </ControlBusProvider>
@@ -886,6 +895,9 @@ describe('DeckColumn', () => {
           onLoopIn={noop}
           onLoopOut={noop}
           onLoopExit={noop}
+          onBeatLoop={noop}
+          onHalveLoop={noop}
+          onDoubleLoop={noop}
           getTrackPeaks={() => null}
         />
       </ControlBusProvider>,
@@ -1399,5 +1411,52 @@ describe('DeckColumn playback mode (M19)', () => {
       }),
     )
     expect(screen.queryByText(/-beat loop/)).not.toBeInTheDocument()
+  })
+
+  it('the 4-beat button sets a beat loop (M23)', () => {
+    const onBeatLoop = vi.fn()
+    renderPlayback(aTrack({ grid: { bpm: 120, firstBeatSeconds: 0 } }), {
+      onBeatLoop: onBeatLoop as unknown as () => void,
+    })
+    fireEvent.click(screen.getByRole('button', { name: '4 beats' }))
+    expect(onBeatLoop).toHaveBeenCalledWith(4)
+  })
+
+  it('the 4-beat button is inert without a grid — disabled, not a guess (M23)', () => {
+    renderPlayback(aTrack({ grid: null }))
+    expect(screen.getByRole('button', { name: '4 beats' })).toBeDisabled()
+  })
+
+  it('halve and double are gated on an active loop (M23)', () => {
+    renderPlayback(aTrack({ loop: null }))
+    expect(screen.getByRole('button', { name: '½×' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '2×' })).toBeDisabled()
+  })
+
+  it('halve and double drive an active loop (M23)', () => {
+    const onHalveLoop = vi.fn()
+    const onDoubleLoop = vi.fn()
+    renderPlayback(
+      aTrack({
+        grid: { bpm: 120, firstBeatSeconds: 0 },
+        loop: { start: 8, end: 10 },
+      }),
+      { onHalveLoop, onDoubleLoop },
+    )
+    fireEvent.click(screen.getByRole('button', { name: '½×' }))
+    fireEvent.click(screen.getByRole('button', { name: '2×' }))
+    expect(onHalveLoop).toHaveBeenCalled()
+    expect(onDoubleLoop).toHaveBeenCalled()
+  })
+
+  it('names a sub-beat loop by its fraction (M23)', () => {
+    // Half a beat at 120 BPM — a count a whole-beat label can't carry.
+    renderPlayback(
+      aTrack({
+        grid: { bpm: 120, firstBeatSeconds: 0 },
+        loop: { start: 8, end: 8.25 },
+      }),
+    )
+    expect(screen.getByText('½-beat loop')).toBeInTheDocument()
   })
 })

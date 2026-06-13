@@ -45,6 +45,9 @@ function fakeDeck(state: Partial<DeckState> = {}): DeckControls {
     loopIn: vi.fn(),
     loopOut: vi.fn(),
     loopExit: vi.fn(),
+    beatLoop: vi.fn(),
+    halveLoop: vi.fn(),
+    doubleLoop: vi.fn(),
     getTrackBeat: vi.fn(() => null),
     getLiveBeat: vi.fn(() => null),
     getZoomSource: vi.fn(() => null),
@@ -234,7 +237,10 @@ describe('applyAppIntent', () => {
     expect(onCrossfade).not.toHaveBeenCalled()
   })
 
-  function playbackDeck(playing: boolean) {
+  function playbackDeck(
+    playing: boolean,
+    loop: { start: number; end: number } | null = null,
+  ) {
     return {
       ...fakeDeck(),
       mode: 'playback' as const,
@@ -249,7 +255,7 @@ describe('applyAppIntent', () => {
         grid: null,
         rate: 1,
         cues: Array<number | null>(8).fill(null),
-        loop: null,
+        loop,
         pendingLoopIn: null,
       },
     }
@@ -374,6 +380,46 @@ describe('applyAppIntent', () => {
     const live = fakeDeck({ playing: true })
     applyAppIntent({ kind: 'track_loop_in', deck: 'a' }, decks(live), noHandlers)
     expect(live.loopIn).not.toHaveBeenCalled()
+  })
+
+  it('the 4 BEAT/EXIT button toggles: sets when idle, exits when a loop runs (M23)', () => {
+    // No loop: the one button drops a fresh 4-beat loop.
+    const idle = playbackDeck(true)
+    applyAppIntent(
+      { kind: 'track_beat_loop', deck: 'a', beats: 4 },
+      decks(idle),
+      noHandlers,
+    )
+    expect(idle.beatLoop).toHaveBeenCalledWith(4)
+    expect(idle.loopExit).not.toHaveBeenCalled()
+
+    // Loop running: the same button releases it, reusing loopExit.
+    const running = playbackDeck(true, { start: 8, end: 10 })
+    applyAppIntent(
+      { kind: 'track_beat_loop', deck: 'a', beats: 4 },
+      decks(running),
+      noHandlers,
+    )
+    expect(running.loopExit).toHaveBeenCalled()
+    expect(running.beatLoop).not.toHaveBeenCalled()
+  })
+
+  it('routes halve and double to a playback deck only (M23)', () => {
+    const deck = playbackDeck(true)
+    applyAppIntent({ kind: 'track_loop_halve', deck: 'a' }, decks(deck), noHandlers)
+    applyAppIntent({ kind: 'track_loop_double', deck: 'a' }, decks(deck), noHandlers)
+    expect(deck.halveLoop).toHaveBeenCalled()
+    expect(deck.doubleLoop).toHaveBeenCalled()
+
+    const live = fakeDeck({ playing: true })
+    applyAppIntent({ kind: 'track_loop_halve', deck: 'a' }, decks(live), noHandlers)
+    applyAppIntent(
+      { kind: 'track_beat_loop', deck: 'a', beats: 4 },
+      decks(live),
+      noHandlers,
+    )
+    expect(live.halveLoop).not.toHaveBeenCalled()
+    expect(live.beatLoop).not.toHaveBeenCalled()
   })
 
   it('a realtime deck ignores jog ticks — still no scratch concept', () => {

@@ -92,7 +92,8 @@ export type TrackLoop = { start: number; end: number }
 
 /** The shortest honest loop: sub-quantum regions are where Web Audio
  * implementations differ, and a near-zero loop is a buzz, not a loop.
- * Only bites without a grid — a gridded loop owes a whole beat. */
+ * The IN→OUT path only hits it without a grid (a gridded loop owes a
+ * whole beat); a halve hits it on any loop, gridded or not (M23). */
 export const MIN_TRACK_LOOP_SECONDS = 0.05
 
 /** Fold a linearly-derived playhead into an active loop: linear until
@@ -188,6 +189,43 @@ export function quantisedLoop(
   if (end > duration) end = duration
   if (!(end - start >= MIN_TRACK_LOOP_SECONDS)) return null
   return { start, end }
+}
+
+/** A one-press beat loop (M23, ADR-0016): `beats` whole beats from the
+ * playhead, the start snapped onto the lattice, the end clamped into
+ * the track. Beat loops are grid-defined — null without a confident
+ * grid (inert on a gridless track), for a non-positive count, or when
+ * no honest region survives the clamp. */
+export function beatLoopRegion(
+  position: number,
+  beats: number,
+  grid: { bpm: number; firstBeatSeconds: number } | null,
+  duration: number,
+): TrackLoop | null {
+  if (!grid || !(beats > 0)) return null
+  const start = snapToGrid(clampOffset(position, duration), grid)
+  let end = start + beats * (60 / grid.bpm)
+  if (end > duration) end = duration
+  if (!(end - start >= MIN_TRACK_LOOP_SECONDS)) return null
+  return { start, end }
+}
+
+/** Halve or double an active loop (M23, ADR-0016): the IN holds, the
+ * end moves by `factor` (½ or 2). Pure length-scaling, never a re-snap
+ * — a beat-aligned loop stays on the grid by construction, and
+ * re-quantising would corrupt a clean fraction (4→2→1→½ beats). Needs
+ * no grid; it scales any active loop. Null below the honest minimum (a
+ * halve floor) or past the track end (a double that would overrun
+ * refuses rather than truncating). */
+export function resizeLoop(
+  loop: TrackLoop,
+  factor: number,
+  duration: number,
+): TrackLoop | null {
+  const end = loop.start + (loop.end - loop.start) * factor
+  if (end > duration) return null
+  if (!(end - loop.start >= MIN_TRACK_LOOP_SECONDS)) return null
+  return { start: loop.start, end }
 }
 
 /** Min/max envelope per bucket across both channels — the static

@@ -109,6 +109,37 @@ describe('createFlx4Translator', () => {
     )
 
     it.each([
+      [0x90, 'a'],
+      [0x91, 'b'],
+    ] as const)(
+      'beat-loop controls on %s drive deck %s (M23, Mixxx chart bytes)',
+      (status, deck) => {
+        const translate = createFlx4Translator()
+        // CUE/LOOP CALL ◄ / ► halve and double the active loop.
+        expect(translate([status, 0x51, PRESS])).toEqual({
+          kind: 'track_loop_halve',
+          deck,
+        })
+        expect(translate([status, 0x53, PRESS])).toEqual({
+          kind: 'track_loop_double',
+          deck,
+        })
+        // Bare IN/4BEAT arms a manual loop; SHIFT makes it a 4-beat loop.
+        expect(translate([status, 0x10, PRESS])).toEqual({
+          kind: 'track_loop_in',
+          deck,
+        })
+        translate([status, 0x3f, 0x7f]) // SHIFT down
+        expect(translate([status, 0x10, PRESS])).toEqual({
+          kind: 'track_beat_loop',
+          deck,
+          beats: 4,
+        })
+        translate([status, 0x3f, 0x00]) // SHIFT up
+      },
+    )
+
+    it.each([
       [0x97, 'a'],
       [0x99, 'b'],
     ] as const)('SAMPLER pads on %s drive deck %s loop slots', (status, deck) => {

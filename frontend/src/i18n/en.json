@@ -185,7 +185,10 @@
       "loopIn": "Loop in",
       "loopOut": "Loop out",
       "loopExit": "Exit loop",
-      "loopBeats": "{{beats}}-beat loop"
+      "loopBeats": "{{beats}}-beat loop",
+      "beatLoop": "4 beats",
+      "loopHalve": "½×",
+      "loopDouble": "2×"
     },
     "health": {
       "buffer": "Buffer",

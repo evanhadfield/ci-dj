@@ -1366,6 +1366,56 @@ describe('useDeck beat clocks (M20)', () => {
     expect(result.current.track!.loop).toBeNull()
   })
 
+  it('a beat loop sets N beats; halve and double scale it, anchored on the IN (M23)', async () => {
+    const { result, channel } = await griddedDeck(8.1)
+    const period = 60 / result.current.track!.grid!.bpm
+
+    act(() => result.current.beatLoop(4))
+    const set = result.current.track!.loop!
+    expect((set.end - set.start) / period).toBeCloseTo(4)
+    expect(channel.setTrackLoop).toHaveBeenLastCalledWith(set.start, set.end)
+
+    act(() => result.current.halveLoop())
+    const halved = result.current.track!.loop!
+    expect(halved.start).toBe(set.start) // the IN holds
+    expect((halved.end - halved.start) / period).toBeCloseTo(2)
+
+    act(() => result.current.doubleLoop())
+    const doubled = result.current.track!.loop!
+    expect(doubled.start).toBe(set.start)
+    expect((doubled.end - doubled.start) / period).toBeCloseTo(4)
+  })
+
+  it('halve and double are no-ops with no active loop (M23)', async () => {
+    const { result, channel } = await griddedDeck(8.1)
+    act(() => result.current.halveLoop())
+    act(() => result.current.doubleLoop())
+    expect(channel.setTrackLoop).not.toHaveBeenCalled()
+    expect(result.current.track!.loop).toBeNull()
+  })
+
+  it('a beat loop is a no-op without a confident grid — inert, not guessed (M23)', async () => {
+    const { engine, channel } = makeFakeEngine()
+    vi.mocked(channel.getTrackStatus).mockReturnValue({
+      position: 10.1,
+      duration: 120,
+      playing: true,
+      ended: false,
+      rate: 1,
+      loop: null,
+      contextTime: 200,
+    })
+    const { result } = renderDeck(engine)
+    act(() => socket(0).serverOpen())
+    await act(async () => {
+      await result.current.loadTrack(new ArrayBuffer(8), 'Gridless')
+    })
+    expect(result.current.track!.grid).toBeNull()
+    act(() => result.current.beatLoop(4))
+    expect(channel.setTrackLoop).not.toHaveBeenCalled()
+    expect(result.current.track!.loop).toBeNull()
+  })
+
   it('the zoom source carries the active loop region in hop units (M21)', async () => {
     const { result, status } = await griddedDeck(8.1)
     // Not looping yet: the close-up has no region to wash.

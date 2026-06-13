@@ -462,6 +462,9 @@ function App() {
           onLoopIn={deckA.loopIn}
           onLoopOut={deckA.loopOut}
           onLoopExit={deckA.loopExit}
+          onBeatLoop={deckA.beatLoop}
+          onHalveLoop={deckA.halveLoop}
+          onDoubleLoop={deckA.doubleLoop}
           getTrackPeaks={deckA.getTrackPeaks}
         />
         <div className="app__center">
@@ -517,6 +520,9 @@ function App() {
           onLoopIn={deckB.loopIn}
           onLoopOut={deckB.loopOut}
           onLoopExit={deckB.loopExit}
+          onBeatLoop={deckB.beatLoop}
+          onHalveLoop={deckB.halveLoop}
+          onDoubleLoop={deckB.doubleLoop}
           getTrackPeaks={deckB.getTrackPeaks}
         />
       </div>

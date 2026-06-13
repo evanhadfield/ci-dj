@@ -50,6 +50,13 @@ export type ControlIntent =
   | { kind: 'track_loop_in'; deck: DeckId }
   | { kind: 'track_loop_out'; deck: DeckId }
   | { kind: 'track_loop_exit'; deck: DeckId }
+  // Beat loops (M23, ADR-0016): a one-press beats-long loop, plus halve
+  // and double of an active loop. The FLX4's "4 BEAT/EXIT" is a single
+  // button, so its intent toggles in dispatch (set when idle, exit when
+  // a loop runs); CUE/LOOP CALL ◄/► scale the active region.
+  | { kind: 'track_beat_loop'; deck: DeckId; beats: number }
+  | { kind: 'track_loop_halve'; deck: DeckId }
+  | { kind: 'track_loop_double'; deck: DeckId }
   | { kind: 'preset_load'; deck: DeckId; preset: StylePreset }
 
 export type ControlBus = {
