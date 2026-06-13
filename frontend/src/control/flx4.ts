@@ -34,17 +34,17 @@ const SHIFT_PAD_DECK: Partial<Record<number, DeckId>> = { 0x98: 'a', 0x9a: 'b' }
 const BEAT_FX_STATUSES = [0x94, 0x95]
 const PLAY_NOTE = 0x0b
 const RECORD_NOTE = 0x47
-/** The LOOP section (M21): IN / OUT / RELOOP-EXIT per the Mixxx FLX4
- * chart — confirm with the monitor (the tempo slider taught us
- * charts lie); the M21 checklist holds that box. */
+/** The LOOP section, measured on the device (the monitor is the arbiter
+ * — the tempo slider taught us charts lie). IN / OUT arm and close a
+ * manual loop (M21). The button the panel labels "4 BEAT/EXIT" sends
+ * note 0x4D — the very byte the M21 chart had read as RELOOP/EXIT — so
+ * it becomes the M23 beat-loop toggle (set when idle, exit when a loop
+ * runs; the toggle lives in dispatch, ADR-0016), which still releases a
+ * running loop exactly as before. CUE/LOOP CALL ◄ / ► (0x51/0x53) halve
+ * and double the active loop. All four confirmed on the monitor. */
 const LOOP_IN_NOTE = 0x10
 const LOOP_OUT_NOTE = 0x11
-const LOOP_EXIT_NOTE = 0x4d
-/** Beat loops (M23, ADR-0016): CUE/LOOP CALL ◄ / ► halve and double the
- * active loop (`loop_halve`/`loop_double` in the Mixxx FLX4 chart), and
- * SHIFT + IN/4BEAT drops a 4-beat auto loop. The ◄/► bytes are from the
- * chart; the 4-beat gesture rides the shifted IN button and is the least
- * certain — the M23 checklist confirms all three on the monitor. */
+const BEAT_LOOP_NOTE = 0x4d
 const LOOP_HALVE_NOTE = 0x51
 const LOOP_DOUBLE_NOTE = 0x53
 const BEAT_LOOP_BEATS = 4
@@ -163,18 +163,16 @@ function buttonIntent(
     return { kind: 'deck_prep', deck: playDeck }
   }
   if (playDeck && note === LOOP_IN_NOTE) {
-    // The IN/4BEAT button: SHIFT drops a 4-beat auto loop (M23), bare
-    // press arms a manual loop start (M21). The 4-beat intent toggles
-    // in dispatch, so this one mapping both sets and exits.
-    return shift[playDeck]
-      ? { kind: 'track_beat_loop', deck: playDeck, beats: BEAT_LOOP_BEATS }
-      : { kind: 'track_loop_in', deck: playDeck }
+    return { kind: 'track_loop_in', deck: playDeck }
   }
   if (playDeck && note === LOOP_OUT_NOTE) {
     return { kind: 'track_loop_out', deck: playDeck }
   }
-  if (playDeck && note === LOOP_EXIT_NOTE) {
-    return { kind: 'track_loop_exit', deck: playDeck }
+  if (playDeck && note === BEAT_LOOP_NOTE) {
+    // The "4 BEAT/EXIT" button (0x4D): one press sets a 4-beat loop or
+    // exits a running one — the toggle lives in dispatch (M23, ADR-0016),
+    // so this single byte both arms and releases (the M21 exit, kept).
+    return { kind: 'track_beat_loop', deck: playDeck, beats: BEAT_LOOP_BEATS }
   }
   if (playDeck && note === LOOP_HALVE_NOTE) {
     return { kind: 'track_loop_halve', deck: playDeck }

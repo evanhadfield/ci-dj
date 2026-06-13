@@ -16,15 +16,15 @@ before, so the monitor is the arbiter here.
 
 ## Beat loop (the 4 BEAT button)
 
-- [ ] **SHIFT + IN/4BEAT** drops a loop on the spot: the region wash
-      appears on the close-up (and shades on the overview), the readout
-      says **4-beat loop**, and the seam is **seamless by ear** — no
-      click, the kick stays in time across the wrap. (The 4-beat byte
-      is the *interpolated* one — if nothing happens, the monitor shows
-      what SHIFT + IN actually sends; the on-screen **4 beats** button
-      is the same action, byte-free, to prove the loop itself works.)
+- [ ] The **4 BEAT/EXIT** button (note `0x4D`, measured) drops a loop on
+      the spot: the region wash appears on the close-up (and shades on
+      the overview), the readout says **4-beat loop**, and the seam is
+      **seamless by ear** — no click, the kick stays in time across the
+      wrap. (The on-screen **4 beats** button is the same action if you
+      want to A/B it.)
 - [ ] Pressing **4 BEAT/EXIT** again **releases** the loop — one button,
-      set then exit (the toggle lives in dispatch, reusing EXIT).
+      set then exit (the toggle lives in dispatch, reusing EXIT). On this
+      device "4 BEAT" and "EXIT" are the same byte `0x4D`.
 - [ ] On the close-up, the **entry/exit caps** sit on beats and the
       wash spans exactly four — what you're looping on is unmistakable.
 
@@ -32,8 +32,7 @@ before, so the monitor is the arbiter here.
 
 - [ ] **CUE/LOOP CALL ◄** halves the active loop: the readout drops to
       **2-beat loop**, the region tightens on the beat, and the wrap
-      stays in time. (Bytes `0x51`/`0x53` from the Mixxx chart — confirm
-      with the monitor.)
+      stays in time. (Notes `0x51`/`0x53`, measured on the monitor.)
 - [ ] **CUE/LOOP CALL ►** doubles it back to **4-beat loop**, and on to
       8 — the end moving on the beat, the IN holding.
 - [ ] Halving so the loop's end falls **behind** the playhead re-fires

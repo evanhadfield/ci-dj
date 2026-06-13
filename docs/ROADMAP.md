@@ -259,9 +259,10 @@ path, so a resize that leaves the playhead outside the region gets M21's
 restart for free. Three deck controls (`beatLoop` set-only, `halveLoop`,
 `doubleLoop`), the `track_beat_loop`/`track_loop_halve`/`track_loop_double`
 intents, and an on-screen 4-beat + ½×/2× row whose readout now names
-clean fractions (½, ¼). The FLX4 maps at last: CUE/LOOP CALL ◄/►
-(`0x51`/`0x53`, halve/double) from the Mixxx chart, the shifted IN/4BEAT
-(4-beat, toggling set/exit in dispatch) interpolated. Gate green and the
+clean fractions (½, ¼). The FLX4 maps at last, **bytes measured on the
+device**: the 4 BEAT/EXIT button (`0x4D` — the byte M21 had read as
+RELOOP/EXIT) toggles set/exit in dispatch, and CUE/LOOP CALL ◄/►
+(`0x51`/`0x53`) halve/double. Gate green and the
 beat-loop math, the resize-past-playhead restart, the toggle, and the
 translator bytes unit-tested. The scripted real-audio check is
 `verify_m23.mjs`; the device half awaits

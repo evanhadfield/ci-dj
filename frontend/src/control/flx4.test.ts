@@ -100,10 +100,6 @@ describe('createFlx4Translator', () => {
           kind: 'track_loop_out',
           deck,
         })
-        expect(translate([status, 0x4d, PRESS])).toEqual({
-          kind: 'track_loop_exit',
-          deck,
-        })
         expect(translate([status, 0x10, RELEASE])).toBeNull()
       },
     )
@@ -112,7 +108,7 @@ describe('createFlx4Translator', () => {
       [0x90, 'a'],
       [0x91, 'b'],
     ] as const)(
-      'beat-loop controls on %s drive deck %s (M23, Mixxx chart bytes)',
+      'beat-loop controls on %s drive deck %s (M23, bytes measured)',
       (status, deck) => {
         const translate = createFlx4Translator()
         // CUE/LOOP CALL ◄ / ► halve and double the active loop.
@@ -124,18 +120,14 @@ describe('createFlx4Translator', () => {
           kind: 'track_loop_double',
           deck,
         })
-        // Bare IN/4BEAT arms a manual loop; SHIFT makes it a 4-beat loop.
-        expect(translate([status, 0x10, PRESS])).toEqual({
-          kind: 'track_loop_in',
-          deck,
-        })
-        translate([status, 0x3f, 0x7f]) // SHIFT down
-        expect(translate([status, 0x10, PRESS])).toEqual({
+        // The "4 BEAT/EXIT" button is note 0x4D — the byte M21 read as
+        // RELOOP/EXIT — now the beat-loop toggle (set/exit in dispatch).
+        expect(translate([status, 0x4d, PRESS])).toEqual({
           kind: 'track_beat_loop',
           deck,
           beats: 4,
         })
-        translate([status, 0x3f, 0x00]) // SHIFT up
+        expect(translate([status, 0x4d, RELEASE])).toBeNull()
       },
     )
 
