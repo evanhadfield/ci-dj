@@ -30,9 +30,10 @@ loop-section bytes no script can confirm (ADR-0015).
 ## Track loop (LOOP section)
 
 - [ ] **LOOP IN** then **LOOP OUT** a few beats later closes a loop:
-      the region shades on the overview, the length reads in beats,
-      and the seam is **seamless by ear** — no click, no stutter, the
-      kick pattern stays in time across the wrap.
+      the region shades on the overview and washes on the beat-view
+      close-up (entry/exit caps at its edges), the length reads in
+      beats, and the seam is **seamless by ear** — no click, no
+      stutter, the kick pattern stays in time across the wrap.
 - [ ] **RELOOP/EXIT** releases it: playback runs straight past the
       old boundary, no jump. (Bytes `0x10`/`0x11`/`0x4D` are from
       the Mixxx chart — confirm with the monitor; the tempo slider

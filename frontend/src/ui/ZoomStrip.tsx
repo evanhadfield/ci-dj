@@ -23,6 +23,9 @@ type ZoomStripSource = {
   beat: { periodHops: number; anchorHop: number } | null
   /** Filled hot cues in hop units (M21), in the playhead's domain. */
   cues: number[]
+  /** The active loop region in hop units (M21), or null when not
+   * looping — washed and bracketed so the wrap is legible up close. */
+  loop: { startHop: number; endHop: number } | null
 }
 
 type ZoomStripProps = {
@@ -89,6 +92,20 @@ export function ZoomStrip({ label, accent, vertical, getSource }: ZoomStripProps
       }
       source.bands.copyWindow(flooredFrom, window)
       const pxPerHop = WIDTH / hops
+      // The loop region (M21) washes behind the bands — the same accent
+      // tint the overview uses — so the looped audio reads inside it.
+      // Only the visible slice shades; a region wider than the window
+      // still fills edge to edge.
+      if (source.loop) {
+        const left = Math.max(0, (source.loop.startHop - fromHop) * pxPerHop)
+        const right = Math.min(WIDTH, (source.loop.endHop - fromHop) * pxPerHop)
+        if (right > left) {
+          context.fillStyle = playhead
+          context.globalAlpha = 0.18
+          context.fillRect(left, 0, right - left, HEIGHT)
+          context.globalAlpha = 1
+        }
+      }
       const centre = HEIGHT / 2
       const height = (value: number) =>
         Math.min(1, Math.sqrt(value) * AMPLITUDE_GAIN) * (HEIGHT * 0.94)
@@ -139,6 +156,20 @@ export function ZoomStrip({ label, accent, vertical, getSource }: ZoomStripProps
         context.fillRect(x, 0, 2, HEIGHT)
         context.globalAlpha = 1
         context.fillRect(x, 0, 8, 6)
+      }
+      // Loop entry/exit (M21): top and bottom caps frame each boundary
+      // that's in view, so what the region wraps on is unmistakable —
+      // and they never read as the full-height centre playhead. An
+      // off-screen edge draws nothing, never a false boundary.
+      if (source.loop) {
+        const capHeight = 14
+        context.fillStyle = playhead
+        for (const edgeHop of [source.loop.startHop, source.loop.endHop]) {
+          if (edgeHop < fromHop || edgeHop > fromHop + hops) continue
+          const x = Math.round((edgeHop - fromHop) * pxPerHop)
+          context.fillRect(x, 0, 2, capHeight)
+          context.fillRect(x, HEIGHT - capHeight, 2, capHeight)
+        }
       }
       // The playhead sits mid-strip; the audio scrolls beneath it.
       context.fillStyle = playhead

@@ -1366,6 +1366,32 @@ describe('useDeck beat clocks (M20)', () => {
     expect(result.current.track!.loop).toBeNull()
   })
 
+  it('the zoom source carries the active loop region in hop units (M21)', async () => {
+    const { result, status } = await griddedDeck(8.1)
+    // Not looping yet: the close-up has no region to wash.
+    expect(result.current.getZoomSource()!.loop).toBeNull()
+
+    act(() => result.current.loopIn())
+    status.position = 10.2
+    act(() => result.current.loopOut())
+    const loop = result.current.track!.loop!
+    const source = result.current.getZoomSource()!
+    // The region in the playhead's hop units, so the wash and the
+    // entry/exit caps land where the audio actually wraps.
+    expect(source.loop).not.toBeNull()
+    expect(source.loop!.startHop / source.playheadHop).toBeCloseTo(
+      loop.start / 10.2,
+      6,
+    )
+    expect(source.loop!.endHop / source.playheadHop).toBeCloseTo(
+      loop.end / 10.2,
+      6,
+    )
+
+    act(() => result.current.loopExit())
+    expect(result.current.getZoomSource()!.loop).toBeNull()
+  })
+
   it('OUT with no IN armed is a no-op, and a seek drops loop and pending IN', async () => {
     const { result, channel, status } = await griddedDeck(8.1)
     act(() => result.current.loopOut())
