@@ -17,6 +17,7 @@
 
 use fundsp::prelude32::*;
 
+use crate::fx::{FxInsert, FxKind};
 use crate::{CHANNELS, DECK_COUNT, MASTER_CEILING, SAMPLE_RATE};
 
 /// Shelf Q matching the Web Audio fixed-slope shelves (S = 1 → Q = 1/√2). The
@@ -176,6 +177,11 @@ pub(crate) struct MixGraph {
     /// Per-deck EQ knob values in `[0, 1]`, `[low, mid, high]`. Default flat
     /// (0.5). Kept so `set_eq` can rebuild a deck's chain from the full triple.
     eq_values: [[f32; 3]; DECK_COUNT],
+    /// Per-deck Color FX insert (ADR-0008), placed post-EQ / pre-fader. At the
+    /// effect's rest position it is a bit-exact dry passthrough. Rebuilt /
+    /// reconfigured off the RT path by `set_fx` / `set_fx_amount`; `mix_frame`
+    /// only ticks the pre-built nodes.
+    fx: [FxInsert; DECK_COUNT],
     /// Per-deck channel-fader volume (linear, default 1.0), applied before the
     /// crossfade. Recomputed by `set_volume` (non-RT).
     volumes: [f32; DECK_COUNT],
@@ -232,6 +238,7 @@ impl MixGraph {
         let mut graph = MixGraph {
             eq,
             eq_values,
+            fx: std::array::from_fn(|_| FxInsert::new(SAMPLE_RATE as f32)),
             volumes: [1.0; DECK_COUNT],
             gains: [0.0; DECK_COUNT],
             limiter: MasterLimiter::new(SAMPLE_RATE as f32),
@@ -288,8 +295,24 @@ impl MixGraph {
         }
     }
 
-    /// Process one frame: per-deck EQ both channels, per-deck volume, equal-power
-    /// crossfade, the master limiter, then the clip-guard ceiling clamp.
+    /// Switch a deck's Color FX effect, rebuilding the effect's nodes **off the RT
+    /// path** (it takes `&mut self`, so it can never overlap a `mix_frame` call —
+    /// the same ownership argument as `set_eq`). The new effect lands at its rest
+    /// position (bypassed); the control layer re-applies the knob amount.
+    pub(crate) fn set_fx(&mut self, deck: usize, kind: FxKind) {
+        self.fx[deck].set_kind(kind);
+    }
+
+    /// Set a deck's Color FX knob amount in `[0, 1]`, reconfiguring the effect's
+    /// parameters off the RT path. Within the effect's dead zone the insert is a
+    /// bit-exact dry passthrough.
+    pub(crate) fn set_fx_amount(&mut self, deck: usize, amount: f32) {
+        self.fx[deck].set_amount(amount);
+    }
+
+    /// Process one frame: per-deck EQ both channels, the Color FX insert, per-deck
+    /// volume, equal-power crossfade, the master limiter, then the clip-guard
+    /// ceiling clamp.
     /// `decks[d] = (left, right)` pre-EQ. Returns the mixed, limited, clamped
     /// `(left, right)` and the master limiter's gain reduction this frame as a
     /// linear factor in `(0, 1]` (1.0 = no reduction), for telemetry.
@@ -311,6 +334,10 @@ impl MixGraph {
             in1[0] = r;
             self.eq[li + 1].tick(&in1, &mut out1);
             let r = out1[0];
+
+            // Color FX insert (ADR-0008): post-EQ, pre-fader. At the effect's rest
+            // position this is a bit-exact dry passthrough.
+            let (l, r) = self.fx[d].process(l, r);
 
             // Channel fader, then the equal-power crossfade weight.
             let g = self.volumes[d] * self.gains[d];
@@ -346,6 +373,9 @@ impl MixGraph {
     pub(crate) fn reset(&mut self) {
         for node in &mut self.eq {
             node.reset();
+        }
+        for insert in &mut self.fx {
+            insert.reset();
         }
         self.limiter.reset();
     }

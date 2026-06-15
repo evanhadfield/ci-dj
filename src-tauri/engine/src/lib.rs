@@ -36,9 +36,12 @@
 //! the render on the same `&mut self` so it stays trivially data-race-free and
 //! fully testable.
 
+mod fx;
 mod graph;
 mod ring;
 pub mod telemetry;
+
+pub use fx::FxKind;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod device;
@@ -214,6 +217,35 @@ impl Engine {
     pub fn set_volume(&mut self, deck_index: usize, gain: f32) {
         assert!(deck_index < DECK_COUNT, "deck index {deck_index} out of range");
         self.graph.set_volume(deck_index, gain);
+    }
+
+    /// Select a deck's Color FX effect (ADR-0008). The insert sits post-EQ,
+    /// pre-fader; at the new effect's rest position it is a bit-exact dry
+    /// passthrough until the knob is moved out of the dead zone.
+    ///
+    /// This **rebuilds the effect's nodes off the RT path** — it takes `&mut self`,
+    /// so by Rust's ownership rules a `set_fx` call and a `render` call can never
+    /// overlap (the same RT-safety argument as `set_eq`). `render` only ticks the
+    /// already-built nodes; it allocates nothing.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT` (a caller programming error).
+    pub fn set_fx(&mut self, deck_index: usize, kind: FxKind) {
+        assert!(deck_index < DECK_COUNT, "deck index {deck_index} out of range");
+        self.graph.set_fx(deck_index, kind);
+    }
+
+    /// Set a deck's Color FX knob amount in `[0, 1]` (the one-knob convention from
+    /// `fx.ts`; `0.5` rests the bipolar filter, `0` rests the rest). Non-RT
+    /// control: reconfigures the active effect's parameters off the RT path while
+    /// keeping its per-channel state. Within the effect's dead zone the insert is a
+    /// bit-exact dry passthrough.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT` (a caller programming error).
+    pub fn set_fx_amount(&mut self, deck_index: usize, amount: f32) {
+        assert!(deck_index < DECK_COUNT, "deck index {deck_index} out of range");
+        self.graph.set_fx_amount(deck_index, amount);
     }
 
     /// Shared telemetry handle. Cheap to clone (`Arc`); a UI/monitor thread can
@@ -848,6 +880,115 @@ mod tests {
         assert!(
             tele.master_gain_reduction_db() > -0.1,
             "meter must reset to ~0 dB after take"
+        );
+    }
+
+    // --- Slice 3 tests: the per-deck Color FX insert (ADR-0008) ---
+    //
+    // The exact effect maths (bit-exact bypass, crush quantize-and-hold, the
+    // dub-echo impulse spacing, the sweep LFO formula, replace-vs-add) is unit
+    // tested in `fx.rs` against the `fx.ts` curves and the Spike A facts. These
+    // integration tests verify the insert is wired into `render()` correctly: the
+    // bypass stays bit-exact through the WHOLE mix path, and an active filter
+    // colours the deck audibly.
+
+    /// (Slice-3 integration) With an effect SELECTED but parked at its rest amount,
+    /// the rendered output is bit-identical to the engine with no FX touched at
+    /// all — the dead-zone bypass survives the whole post-insert mix path
+    /// (volume → crossfade → limiter → clamp), 0 ULP. Checked for every effect.
+    #[test]
+    fn fx_at_rest_renders_bit_identical_to_no_fx() {
+        use fx::FxKind;
+        let kinds = [
+            FxKind::Filter,
+            FxKind::DubEcho,
+            FxKind::Space,
+            FxKind::Crush,
+            FxKind::Noise,
+            FxKind::Sweep,
+        ];
+        for kind in kinds {
+            // Reference engine: no FX call at all.
+            let mut ref_engine = Engine::new();
+            let mut ref_a = ref_engine.create_deck(0);
+            let _ref_b = ref_engine.create_deck(1);
+            ref_engine.set_crossfade(0.0); // full deck A so the insert is in-path
+
+            // Subject engine: select the effect, park it at its rest amount.
+            let mut sub_engine = Engine::new();
+            let mut sub_a = sub_engine.create_deck(0);
+            let _sub_b = sub_engine.create_deck(1);
+            sub_engine.set_crossfade(0.0);
+            sub_engine.set_fx(0, kind);
+            // Rest amount: 0.5 for the filter, 0.0 otherwise — inside the dead zone.
+            let rest = if kind == FxKind::Filter { 0.5 } else { 0.0 };
+            sub_engine.set_fx_amount(0, rest);
+
+            // Identical input to both decks.
+            let mut src_ref = SineSource::new(440.0, 0.3);
+            let mut src_sub = SineSource::new(440.0, 0.3);
+            let prime = PREBUFFER_FRAMES + 4 * BLOCK;
+            feed(&mut ref_a, &mut src_ref, prime);
+            feed(&mut sub_a, &mut src_sub, prime);
+
+            let mut ref_out = vec![0.0f32; BLOCK * CHANNELS as usize];
+            let mut sub_out = vec![0.0f32; BLOCK * CHANNELS as usize];
+            for _ in 0..8 {
+                ref_engine.render(&mut ref_out, BLOCK);
+                sub_engine.render(&mut sub_out, BLOCK);
+                for (r, s) in ref_out.iter().zip(sub_out.iter()) {
+                    assert_eq!(
+                        r.to_bits(),
+                        s.to_bits(),
+                        "{kind:?} at rest must render bit-identical to no FX"
+                    );
+                }
+            }
+        }
+    }
+
+    /// (Slice-3 integration) An active lowpass filter (amount 0.25 → ~1200 Hz)
+    /// attenuates a high tone well below the cutoff-pass and leaves a low tone
+    /// (well inside the passband) essentially intact.
+    #[test]
+    fn filter_lowpass_attenuates_high_passes_low() {
+        use fx::FxKind;
+        const AMP: f32 = 0.2;
+        let low_freq = 200.0f32; // ≪ ~1200 Hz cutoff
+        let high_freq = 10_000.0f32; // ≫ cutoff
+
+        // RMS at a frequency, with the lowpass filter active on deck A.
+        let measure = |freq: f32| {
+            let mut engine = Engine::new();
+            let mut deck_a = engine.create_deck(0);
+            let _deck_b = engine.create_deck(1);
+            engine.set_crossfade(0.0);
+            engine.set_fx(0, FxKind::Filter);
+            engine.set_fx_amount(0, 0.25); // lowpass ~1200 Hz
+            deck_a_rms(&mut engine, &mut deck_a, freq, AMP)
+        };
+        // Flat reference (filter at rest = bypass) at each frequency.
+        let reference = |freq: f32| {
+            let mut engine = Engine::new();
+            let mut deck_a = engine.create_deck(0);
+            let _deck_b = engine.create_deck(1);
+            engine.set_crossfade(0.0);
+            deck_a_rms(&mut engine, &mut deck_a, freq, AMP)
+        };
+
+        let low_db = 20.0 * (measure(low_freq) / reference(low_freq)).log10();
+        let high_db = 20.0 * (measure(high_freq) / reference(high_freq)).log10();
+
+        // Low tone: near-unity through the lowpass (within ~1 dB).
+        assert!(low_db.abs() < 1.0, "low tone should pass, got {low_db:.2} dB");
+        // High tone: strongly attenuated (a 12 dB/oct lowpass an octave+ above the
+        // ~1200 Hz cutoff cuts it heavily).
+        assert!(high_db < -20.0, "high tone should be attenuated, got {high_db:.2} dB");
+        // And the filter clearly separates them.
+        assert!(
+            low_db - high_db > 20.0,
+            "lowpass must pass low far more than high (Δ {:.2} dB)",
+            low_db - high_db
         );
     }
 }
