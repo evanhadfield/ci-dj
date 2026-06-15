@@ -2,7 +2,14 @@
  * connect/hot-plug/permission flow is unit-testable with a fake MIDIAccess;
  * the React side lives in useMidi. Access is only requested from an explicit
  * user gesture — the browser permission prompt should never appear
- * unprompted. */
+ * unprompted.
+ *
+ * In the native shell (Phase 2) there is no browser Web MIDI: tauri-plugin-midi
+ * injects `navigator.requestMIDIAccess` as a polyfill over midir/CoreMIDI at
+ * webview startup (SysEx + output send included; ports poll every 1 s for
+ * hot-plug). The single callsite below is that shim's target, so the same code
+ * drives both transports — `flx4.ts`, `bus.ts`, `useMidi.ts` and the byte map
+ * are untouched. */
 
 export type MidiStatus =
   | 'unsupported'
