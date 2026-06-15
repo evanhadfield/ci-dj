@@ -77,5 +77,18 @@ whether it drives the FLX4 on the device — the three checks above.
 
 ## Results
 
-_Pending the on-device run._
+**On-device PASS (2026-06-15).** All three checks confirmed on the FLX4 via
+`tauri-plugin-midi` in the Tauri v2 / WKWebView harness:
+
+- **Input** — controls produce MIDI messages.
+- **SysEx round-trip** — the position query floods the controller's current
+  positions back.
+- **Output / LED** — the pads light, and sending output is stable: no renderer
+  crash. The native `midir` path sidesteps the Chromium MIDI-output crash class
+  CLAUDE.md warns about, exactly as predicted.
+
+`tauri-plugin-midi` drives the FLX4 from a native (WKWebView) shell. ADR-0018's
+MIDI premise holds, and the measured `control/` layer (the `flx4` translator +
+the byte map + the ControlBus) ports to the native shell unchanged. Spike C:
+**PASS.**
 
