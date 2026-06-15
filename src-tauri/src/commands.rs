@@ -261,13 +261,36 @@ pub fn set_on_air(state: tauri::State<'_, Host>, deck: usize, on: bool) {
 
 // --- Playback deck transport ---
 
-/// Load a decoded track (interleaved-stereo f32 @ 48 kHz) onto a deck. The
-/// webview decodes + resamples and ships the samples; the engine takes ownership
-/// and switches the deck to Playback.
+/// Decode interleaved-stereo f32 (little-endian) from a raw byte payload. The
+/// webview ships decoded PCM as bytes (a multi-MB track as a JSON number array is
+/// not viable — Tauri's binary IPC carries it as `Vec<u8>`); any trailing partial
+/// frame is ignored.
+fn pcm_from_le_bytes(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// Read a little-endian `u32` at `offset` from a binary payload prefix.
+fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    let end = offset + 4;
+    let slice = bytes.get(offset..end)?;
+    Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+/// Load a decoded track onto a deck, switching it to Playback. The payload is a
+/// little-endian `u32` deck index followed by interleaved-stereo f32 @ 48 kHz
+/// (the webview decodes + resamples a WAV and ships the bytes). Sent over Tauri's
+/// binary IPC as a single `Vec<u8>` arg — a JSON number array would be megabytes
+/// of text for a full track.
 #[tauri::command]
-pub fn load_track(state: tauri::State<'_, Host>, deck: usize, samples: Vec<f32>) {
+pub fn load_track(state: tauri::State<'_, Host>, payload: Vec<u8>) {
+    let Some(deck) = read_u32_le(&payload, 0).map(|d| d as usize) else {
+        return;
+    };
     if valid_deck(deck) {
-        state.load_track(deck, samples);
+        state.load_track(deck, pcm_from_le_bytes(&payload[4..]));
     }
 }
 
@@ -357,18 +380,21 @@ pub fn clear_loop(state: tauri::State<'_, Host>, deck: usize, slot: usize) {
     }
 }
 
-/// Load a decoded loop/pad (interleaved-stereo f32 @ 48 kHz) into a slot. A
-/// one-shot plays once; otherwise it loops (seam folded).
+/// Load a decoded loop/pad into a slot. The payload prefixes the interleaved f32
+/// PCM with three little-endian `u32`s: deck, slot, and the one-shot flag (0/1).
+/// A one-shot plays once; otherwise it loops (seam folded). Binary IPC, like
+/// [`load_track`].
 #[tauri::command]
-pub fn load_generated_loop(
-    state: tauri::State<'_, Host>,
-    deck: usize,
-    slot: usize,
-    samples: Vec<f32>,
-    one_shot: bool,
-) {
+pub fn load_generated_loop(state: tauri::State<'_, Host>, payload: Vec<u8>) {
+    let (Some(deck), Some(slot), Some(one_shot)) = (
+        read_u32_le(&payload, 0).map(|d| d as usize),
+        read_u32_le(&payload, 4).map(|s| s as usize),
+        read_u32_le(&payload, 8).map(|f| f != 0),
+    ) else {
+        return;
+    };
     if valid_deck(deck) && valid_slot(slot) {
-        state.load_generated_loop(deck, slot, samples, one_shot);
+        state.load_generated_loop(deck, slot, pcm_from_le_bytes(&payload[12..]), one_shot);
     }
 }
 
