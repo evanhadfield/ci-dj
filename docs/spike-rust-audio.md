@@ -257,10 +257,9 @@ Findings:
    noise-IR convolution. Exact parity needs a partitioned-convolution reverb;
    otherwise accept a tuned FDN.
 
-**Not yet run (needs a local device + sidecar + time):** the `cpal` device output,
-the ≥10-min sustained two-deck underrun run, the transport-channel measurement
-(loopback/UDS/shm jitter under load), and the RT-safety guards (`assert_no_alloc`,
-SPSC-per-deck, FTZ/DAZ) — pass-list criteria 1 and 6.
+**Run 1 left open (now addressed in Run 2):** the real-time half — `cpal` device
+output, the transport-channel measurement, the RT-safety guards, and the sustained
+run (pass-list criteria 1 and 6).
 
 **Interim verdict (offline slice — DSP coverage complete):** strong. fundsp
 reproduces **EQ, the filter FX (after the Q-in-dB fix), and bypass to ~1e-6**,
@@ -268,7 +267,49 @@ holds the **ceiling/transparency invariants exactly**, and the **Crush hand-roll
 bit-exact**. Three nodes need hand-rolls — all known, bounded DSP, none a blocker:
 the **limiter body** (a feed-forward compressor; the invariants cover the rest),
 **Crush** (the ~8-line quantise-and-hold, bit-exact), and **Space** (a tuned FDN
-approximates; exact parity wants partitioned convolution). This does **not** yet
-flip ADR-0017/0019 to Accepted — the real-time half (device, sustained run,
-transport, RT guards) is still open. Next: run the `cpal`/transport half on the
-target Mac against a live sidecar.
+approximates; exact parity wants partitioned convolution). The real-time half is
+**Run 2**, below.
+
+## Run 2 — real-time half (2026-06-15)
+
+Two binaries in `engine/` — `rt_engine`, `transport_bench` — on `cpal 0.18.1`,
+`rtrb 0.3.4`, `assert_no_alloc 1.1.2` (armed in release via `warn_release`). A real
+output device was available, so both ran (not just the headless bench). Numbers
+below independently reproduced.
+
+**Transport selection (criterion 6)** — inter-arrival jitter, 8 CPU burners on 10
+cores; one deck's 0.366 MB/s stream (~1.5 MB/s is the multi-deck aggregate):
+
+| channel | MAX gap (no load) | MAX gap (load) | vs 1.5 s margin | late |
+| --- | --- | --- | --- | --- |
+| **shm** (in-proc `rtrb`) | 0.004 ms | 0.001 ms | ~6 orders inside | 0 |
+| **tcp** (loopback, reuses v0) | 0.36 ms | 0.24 ms | ~4 orders inside | 0 |
+| uds | 1.27 ms | 0.63 ms | ~3 orders inside | 0 |
+
+All three pass with vast margin; load did not degrade tcp/shm (busy cores keep the
+consumer thread hot). **Pick: `shm`** for a co-located sidecar (worst-case 0.004 ms,
+contention-immune); **`tcp`** for an out-of-process Python sidecar (0.36 ms, reuses
+protocol v0 framing, beats uds on every percentile). Channel chosen — criterion 6
+met.
+
+**Device output + RT safety (criterion 1)** — `rt_engine` on "MacBook Pro Speakers",
+exact 48000/2-ch/f32, **granted buffer 256 frames** (CoreAudio honored `Fixed(256)`,
+5.33 ms). Over 15–20 s two-deck runs incl. a `--load 8` variant: **zero underruns**
+post-prebuffer, rings steady at the ≤3 s producer lead, and the **`assert_no_alloc`
+guard printed no warnings** — the callback is genuinely alloc/lock/syscall/log-free.
+Callback reviewed: per-deck SPSC `rtrb` reads, FTZ/DAZ on the audio thread,
+off-thread-built fundsp EQ ticked in place, atomics-only telemetry — sound.
+
+**Remaining for a full criterion-1 PASS:** the **≥10-min sustained run** (and its
+loaded variant) on the target Mac — an endurance check, not a code gap.
+Command: `./target/release/rt_engine --duration 600 [--load 8]`; PASS = granted 256,
+zero underruns, no alloc warnings over the full 10 min.
+
+## Overall verdict
+
+Spike A is **substantially PASS, pending one endurance run.** DSP parity holds to
+~1e-6 with three bounded hand-rolls identified (limiter body, Crush, Space); the
+real-time path runs glitch-free with verified RT-safety at a 256-frame buffer; the
+transport is chosen (`shm` co-located, `tcp` out-of-process). The only box left
+unticked is the **≥10-min sustained device run** — an operator step. On that green,
+ADR-0017 and ADR-0019 clear their spike gate and move Proposed → Accepted.
