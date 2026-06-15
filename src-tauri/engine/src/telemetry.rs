@@ -19,6 +19,11 @@ use crate::DECK_COUNT;
 /// enough for a meter. Read back via `master_peak()`.
 const PEAK_SCALE: f32 = 1_000_000.0;
 
+/// Unity (no gain reduction) as fixed-point millis-of-full-scale: `1.0 ×
+/// PEAK_SCALE`. The gain-reduction meter stores the deepest *applied* linear
+/// gain (monotone-min) and seeds/clears to this.
+const GR_FULL_SCALE: u64 = PEAK_SCALE as u64;
+
 /// Per-deck and master statistics. One instance per `Engine`. All fields are
 /// atomics so the RT `render()` updates them without a lock and a UI thread can
 /// read them at any time.
@@ -41,6 +46,12 @@ pub struct Telemetry {
     /// Master peak magnitude since the last `take_master_peak()`, fixed-point
     /// (× `PEAK_SCALE`). Monotone-max within a window.
     master_peak: AtomicU64,
+    /// Deepest master limiter gain reduction since the last
+    /// `take_master_gain_reduction()`, stored as the *applied linear gain*
+    /// (× `PEAK_SCALE`) — i.e. monotone-*min* of `applied ∈ (0, 1]`. 1.0 = no
+    /// reduction; smaller = more. Read back as dB (≤ 0) via the getters. Mirrors
+    /// ADR-0017's `getMasterGainReduction` mixer readout, atomics-only.
+    master_gr_gain: AtomicU64,
 }
 
 impl Telemetry {
@@ -53,6 +64,8 @@ impl Telemetry {
             fill_max: std::array::from_fn(|_| AtomicUsize::new(0)),
             primed: std::array::from_fn(|_| AtomicBool::new(false)),
             master_peak: AtomicU64::new(0),
+            // Start at unity (no reduction): GR_FULL_SCALE × PEAK_SCALE.
+            master_gr_gain: AtomicU64::new(GR_FULL_SCALE),
         }
     }
 
@@ -87,6 +100,18 @@ impl Telemetry {
     pub(crate) fn record_master_peak(&self, magnitude: f32) {
         let v = (magnitude * PEAK_SCALE) as u64;
         update_max_u64(&self.master_peak, v);
+    }
+
+    /// Fold the master limiter's applied gain (linear, `(0, 1]`; 1.0 = no
+    /// reduction) into the gain-reduction meter (monotone-MIN, so the deepest
+    /// reduction in the window wins). Wait-free.
+    #[inline]
+    pub(crate) fn record_master_gain_reduction(&self, applied_gain: f32) {
+        // Clamp to (0, 1]: only reduction is meaningful; the makeup-cancelled
+        // staging gain is excluded upstream so unity here means transparent.
+        let g = applied_gain.clamp(0.0, 1.0);
+        let v = (g * PEAK_SCALE) as u64;
+        update_min_u64(&self.master_gr_gain, v);
     }
 
     // --- Reader-side getters (any thread; wait-free) ---
@@ -131,6 +156,31 @@ impl Telemetry {
     pub fn take_master_peak(&self) -> f32 {
         self.master_peak.swap(0, Ordering::Relaxed) as f32 / PEAK_SCALE
     }
+
+    /// Read the deepest master limiter gain reduction in the window as dB (≤ 0;
+    /// 0 when the limiter is idle), WITHOUT clearing it. Mirrors ADR-0017's
+    /// `getMasterGainReduction` readout.
+    pub fn master_gain_reduction_db(&self) -> f32 {
+        gr_gain_to_db(self.master_gr_gain.load(Ordering::Relaxed))
+    }
+
+    /// Read the deepest gain reduction (dB, ≤ 0) and reset the window to unity —
+    /// the typical meter read. Atomic swap, wait-free.
+    pub fn take_master_gain_reduction_db(&self) -> f32 {
+        gr_gain_to_db(self.master_gr_gain.swap(GR_FULL_SCALE, Ordering::Relaxed))
+    }
+}
+
+/// Convert a stored applied-gain fixed-point value (`(0, 1] × PEAK_SCALE`) to a
+/// reduction in dB (≤ 0; 0 at unity). A zero/empty store reads as 0 dB.
+#[inline]
+fn gr_gain_to_db(stored: u64) -> f32 {
+    let gain = stored as f32 / PEAK_SCALE;
+    if gain >= 1.0 || gain <= 0.0 {
+        0.0
+    } else {
+        20.0 * gain.log10()
+    }
 }
 
 #[inline]
@@ -159,6 +209,17 @@ fn update_max(a: &AtomicUsize, v: usize) {
 fn update_max_u64(a: &AtomicU64, v: u64) {
     let mut cur = a.load(Ordering::Relaxed);
     while v > cur {
+        match a.compare_exchange_weak(cur, v, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(x) => cur = x,
+        }
+    }
+}
+
+#[inline]
+fn update_min_u64(a: &AtomicU64, v: u64) {
+    let mut cur = a.load(Ordering::Relaxed);
+    while v < cur {
         match a.compare_exchange_weak(cur, v, Ordering::Relaxed, Ordering::Relaxed) {
             Ok(_) => break,
             Err(x) => cur = x,

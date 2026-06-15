@@ -86,6 +86,27 @@ impl DeckId {
     }
 }
 
+/// A deck's 3-band EQ band. The layout matches the Web Audio engine
+/// (`frontend/src/audio/eq.ts`): a low shelf at 250 Hz, a mid bell at 1 kHz,
+/// and a high shelf at 2.5 kHz.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EqBand {
+    Low,
+    Mid,
+    High,
+}
+
+impl EqBand {
+    /// The band's index into a deck's `[low, mid, high]` EQ value triple.
+    fn index(self) -> usize {
+        match self {
+            EqBand::Low => 0,
+            EqBand::Mid => 1,
+            EqBand::High => 2,
+        }
+    }
+}
+
 /// The non-RT producer side of a deck. Held by whoever feeds the deck (the
 /// transport/decode thread). Its `post_pcm` is the SOLE writer of the deck's
 /// ring; see the module-level note on the SPSC handoff.
@@ -167,6 +188,34 @@ impl Engine {
         self.graph.set_crossfade(position);
     }
 
+    /// Set a deck's EQ `band` knob value in `[0, 1]` (0 = kill, 0.5 = flat,
+    /// 1 = boost; see `EqBand` / the `eqValueToDb` curve). Non-RT control.
+    ///
+    /// This rebuilds that deck's EQ filter chain **off the RT path** (it takes
+    /// `&mut self`, so it can never overlap a `render` call — Rust's ownership
+    /// rules make the allocation safe here). `render` only ticks the
+    /// already-built fixed-coefficient nodes; it allocates nothing. See
+    /// `MixGraph::set_eq` for how a future device-command channel would deliver
+    /// the change RT-safely once the audio thread owns the `Engine`.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT` (a caller programming error).
+    pub fn set_eq(&mut self, deck_index: usize, band: EqBand, value: f32) {
+        assert!(deck_index < DECK_COUNT, "deck index {deck_index} out of range");
+        self.graph.set_eq(deck_index, band.index(), value);
+    }
+
+    /// Set a deck's channel-fader volume (linear gain, `0..1+`; default 1.0),
+    /// applied before the crossfade. Non-RT control; writes a gain the RT path
+    /// reads.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT` (a caller programming error).
+    pub fn set_volume(&mut self, deck_index: usize, gain: f32) {
+        assert!(deck_index < DECK_COUNT, "deck index {deck_index} out of range");
+        self.graph.set_volume(deck_index, gain);
+    }
+
     /// Shared telemetry handle. Cheap to clone (`Arc`); a UI/monitor thread can
     /// hold one and read stats while `render` runs — all reads are wait-free.
     pub fn telemetry(&self) -> Arc<Telemetry> {
@@ -197,6 +246,7 @@ impl Engine {
         }
 
         let mut master_peak = 0.0f32;
+        let mut min_gain = 1.0f32;
         for f in 0..frames {
             // Pop one stereo frame from each deck (zero-fill on shortfall).
             let mut pairs = [(0.0f32, 0.0f32); DECK_COUNT];
@@ -206,7 +256,7 @@ impl Engine {
                 }
             }
 
-            let (ol, or) = self.graph.mix_frame(pairs);
+            let (ol, or, gain_reduction) = self.graph.mix_frame(pairs);
 
             let base = f * CHANNELS as usize;
             out[base] = ol;
@@ -216,8 +266,14 @@ impl Engine {
             if peak > master_peak {
                 master_peak = peak;
             }
+            // Fold the limiter's per-frame applied gain into the GR meter
+            // (monotone-min over the block; the deepest reduction wins).
+            if gain_reduction < min_gain {
+                min_gain = gain_reduction;
+            }
         }
         self.telemetry.record_master_peak(master_peak);
+        self.telemetry.record_master_gain_reduction(min_gain);
     }
 }
 
@@ -265,11 +321,14 @@ mod tests {
         }
     }
 
-    /// The reference bare mix for a single pair of stereo inputs: flat EQ (the
-    /// Slice-1 EQ is unity at every band, so it is a passthrough), equal-power
+    /// The reference bare mix for a single pair of stereo inputs: flat EQ (every
+    /// band at 0.5 is unity, so a passthrough), unity volume, equal-power
     /// crossfade, then the master clamp. This is the parity oracle the engine
-    /// output must match. Note the flat shelves are designed to unity-pass, but
-    /// biquad arithmetic is not bit-exact identity, so the test uses an epsilon.
+    /// output must match **for a sub-threshold signal**, where the Slice-2
+    /// limiter is level-transparent (its makeup is cancelled). Tests that use it
+    /// keep peaks below the −6 dB limiter threshold so the limiter does not
+    /// engage; the clamp here is just the never-exceeded ceiling guard. Biquad
+    /// arithmetic is not bit-exact identity, so the test uses an epsilon.
     fn expected_mix(a: (f32, f32), b: (f32, f32), position: f32) -> (f32, f32) {
         let angle = position.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
         let ga = angle.cos();
@@ -369,11 +428,17 @@ mod tests {
         }
     }
 
-    /// (4) The mixed output equals the expected bare mix (equal-power crossfade
-    /// plus clamp) sample-for-sample (within a tiny epsilon for the flat
-    /// biquads), and never exceeds the master ceiling — swept across positions.
+    /// (4) The mixed output equals the expected bare mix (flat EQ, unity volume,
+    /// equal-power crossfade, transparent limiter) sample-for-sample (within a
+    /// tiny epsilon for the flat biquads), and never exceeds the master ceiling,
+    /// swept across positions. Amplitudes are deliberately sub-threshold so the
+    /// Slice-2 limiter is level-transparent and the flat-mix oracle still holds:
+    /// the worst-case post-crossfade peak is about `0.3 * sqrt(2)` (~0.42), under
+    /// the limiter threshold of 0.501 (the -6 dB point).
     #[test]
     fn output_matches_bare_mix_and_respects_ceiling() {
+        // Sub-threshold amplitude (see the doc note): keeps the limiter idle.
+        const AMP: f32 = 0.3;
         for &position in &[0.0f32, 0.25, 0.5, 0.75, 1.0] {
             let mut engine = Engine::new();
             let mut deck_a = engine.create_deck(0);
@@ -382,10 +447,10 @@ mod tests {
 
             // Two independent reference sources; we replay the SAME phase
             // progression into the oracle to predict the mix.
-            let mut sa = SineSource::new(220.0, 0.9);
-            let mut sb = SineSource::new(330.0, 0.9);
-            let mut ref_a = SineSource::new(220.0, 0.9);
-            let mut ref_b = SineSource::new(330.0, 0.9);
+            let mut sa = SineSource::new(220.0, AMP);
+            let mut sb = SineSource::new(330.0, AMP);
+            let mut ref_a = SineSource::new(220.0, AMP);
+            let mut ref_b = SineSource::new(330.0, AMP);
 
             // Prime well past the high-water so nothing zero-fills.
             let prime = PREBUFFER_FRAMES + 4 * BLOCK;
@@ -430,10 +495,13 @@ mod tests {
         }
     }
 
-    /// (4b) The clamp actually engages: driving two loud in-phase decks past the
-    /// ceiling produces output pinned to exactly ±MASTER_CEILING, never beyond.
+    /// (4b) The master never exceeds the ceiling under a loud DC input — the
+    /// clip-guard invariant. (Slice 1 expected the clamp to *pin* loud DC to the
+    /// ceiling; Slice 2's limiter tames it BELOW the ceiling first, so the
+    /// guard rarely fires — the invariant is "never above", which still holds.
+    /// The taming itself is covered by `limiter_*` below.)
     #[test]
-    fn loud_in_phase_decks_pin_to_ceiling() {
+    fn loud_in_phase_decks_never_exceed_ceiling() {
         let mut engine = Engine::new();
         let mut deck_a = engine.create_deck(0);
         let mut deck_b = engine.create_deck(1);
@@ -441,16 +509,8 @@ mod tests {
 
         // DC-ish full-scale: post-crossfade sum ≈ 2 * 1.0 * 0.707 = 1.414 > ceil.
         let prime = PREBUFFER_FRAMES + 2 * BLOCK;
-        let mut a = vec![1.0f32; prime * CHANNELS as usize];
-        let mut b = vec![1.0f32; prime * CHANNELS as usize];
-        // Use a steady high level (sine at the peak would dip; constant is the
-        // clean stress case). Flat EQ passes DC at unity.
-        for v in a.iter_mut() {
-            *v = 1.0;
-        }
-        for v in b.iter_mut() {
-            *v = 1.0;
-        }
+        let a = vec![1.0f32; prime * CHANNELS as usize];
+        let b = vec![1.0f32; prime * CHANNELS as usize];
         assert_eq!(deck_a.post_pcm(&a), a.len());
         assert_eq!(deck_b.post_pcm(&b), b.len());
 
@@ -465,12 +525,6 @@ mod tests {
                 "sample {s} exceeded the ceiling"
             );
         }
-        // The last block should be pinned at the ceiling (steady-state DC).
-        let last = out[out.len() - 2];
-        assert!(
-            (last - MASTER_CEILING).abs() < 1e-3,
-            "steady loud mix should pin to the ceiling, got {last}"
-        );
     }
 
     /// (5) An underrun IS counted when a primed ring is starved: prime a deck,
@@ -517,5 +571,283 @@ mod tests {
         let written = deck_a.post_pcm(&huge);
         assert!(written < huge.len(), "a full ring must drop the overflow tail");
         assert_eq!(deck_a.free_samples(), 0, "ring should be full after the push");
+    }
+
+    // --- Slice 2 tests: the real EQ curve, per-deck volume, master limiter ---
+    //
+    // The exact Chromium-vs-fundsp WAVEFORM parity was already proven in Spike A
+    // (`docs/spike-rust-audio.md`, golden `spike/rust-audio/golden/`): EQ shelves
+    // /bell to ~1e-6, limiter invariants exact. These headless tests verify the
+    // CURVE (kill/flat/boost band levels) and the limiter INVARIANTS (ceiling +
+    // sub-threshold transparency) — not a waveform diff, which was the spike's
+    // job.
+
+    /// Drive deck A alone (crossfade fully on A) with a steady sine at `freq`,
+    /// amplitude `amp`, render `blocks` blocks past a settling skip, and return
+    /// the RMS of the left channel over the last `measure_blocks`. The signal
+    /// stays on A so the EQ under test is the only colouring.
+    fn deck_a_rms(engine: &mut Engine, deck_a: &mut DeckHandle, freq: f32, amp: f32) -> f32 {
+        let mut src = SineSource::new(freq, amp);
+        // Prime well past the high-water plus settling headroom.
+        let prime = PREBUFFER_FRAMES + 12 * BLOCK;
+        feed(deck_a, &mut src, prime);
+
+        let mut out = vec![0.0f32; BLOCK * CHANNELS as usize];
+        // Skip the EQ transient, then measure several blocks of steady state.
+        let skip_blocks = 8;
+        let measure_blocks = 16;
+        for _ in 0..skip_blocks {
+            engine.render(&mut out, BLOCK);
+        }
+        let mut sum_sq = 0.0f64;
+        let mut n = 0u64;
+        for _ in 0..measure_blocks {
+            engine.render(&mut out, BLOCK);
+            for f in 0..BLOCK {
+                let l = out[2 * f] as f64;
+                sum_sq += l * l;
+                n += 1;
+            }
+        }
+        (sum_sq / n as f64).sqrt() as f32
+    }
+
+    /// (S2-1) The EQ curve: at each band's centre, kill (0) ≈ −40 dB, flat (0.5)
+    /// ≈ 0 dB, boost (1) ≈ +6 dB relative to the flat passthrough. Low/high are
+    /// true shelves (measured well inside the shelf band); the mid is a bell at
+    /// its centre.
+    #[test]
+    fn eq_curve_kill_flat_boost_per_band() {
+        // The `eqValueToDb` curve targets (frontend/src/audio/eq.ts).
+        const EQ_KILL_DB_TARGET: f32 = -40.0;
+        const EQ_BOOST_DB_TARGET: f32 = 6.0;
+        // (band, test frequency). Shelves measured deep in-band (low 60 Hz, high
+        // 8 kHz) so the full shelf gain shows; the mid bell at its 1 kHz centre.
+        let cases = [(EqBand::Low, 60.0f32), (EqBand::Mid, 1_000.0), (EqBand::High, 8_000.0)];
+        // Sub-threshold amplitude: even a +6 dB boost (×2) stays under the −6 dB
+        // limiter threshold, so the limiter never colours the measurement.
+        const AMP: f32 = 0.2;
+
+        for (band, freq) in cases {
+            // Flat baseline (all bands 0.5).
+            let flat = {
+                let mut engine = Engine::new();
+                let mut deck_a = engine.create_deck(0);
+                let _deck_b = engine.create_deck(1);
+                engine.set_crossfade(0.0); // full deck A
+                deck_a_rms(&mut engine, &mut deck_a, freq, AMP)
+            };
+
+            // Kill (band → 0): expect ≈ −40 dB relative.
+            let killed = {
+                let mut engine = Engine::new();
+                let mut deck_a = engine.create_deck(0);
+                let _deck_b = engine.create_deck(1);
+                engine.set_crossfade(0.0);
+                engine.set_eq(0, band, 0.0);
+                deck_a_rms(&mut engine, &mut deck_a, freq, AMP)
+            };
+
+            // Boost (band → 1): expect ≈ +6 dB relative.
+            let boosted = {
+                let mut engine = Engine::new();
+                let mut deck_a = engine.create_deck(0);
+                let _deck_b = engine.create_deck(1);
+                engine.set_crossfade(0.0);
+                engine.set_eq(0, band, 1.0);
+                deck_a_rms(&mut engine, &mut deck_a, freq, AMP)
+            };
+
+            let kill_db = 20.0 * (killed / flat).log10();
+            let boost_db = 20.0 * (boosted / flat).log10();
+
+            // Kill target is −40 dB. The mid bell at its centre hits it exactly
+            // (≈ −40.0 dB); the low/high shelves measured deep in-band approach it
+            // (≈ −38 dB) — both are a true kill within ~3 dB of the −40 target.
+            assert!(
+                (kill_db - EQ_KILL_DB_TARGET).abs() < 3.0,
+                "{band:?} @ {freq} Hz kill should be ≈ {EQ_KILL_DB_TARGET} dB, got {kill_db:.2} dB"
+            );
+            // Boost is the clean target: +6 dB within ~0.2 dB.
+            assert!(
+                (boost_db - EQ_BOOST_DB_TARGET).abs() < 0.2,
+                "{band:?} @ {freq} Hz boost should be ≈ {EQ_BOOST_DB_TARGET} dB, got {boost_db:.2} dB"
+            );
+        }
+    }
+
+    /// (S2-1b) Flat (every band 0.5) is a near-unity passthrough on a deck: the
+    /// per-band EQ at flat colours the signal by < ~0.1 dB at a mid frequency.
+    #[test]
+    fn eq_flat_is_unity_passthrough() {
+        const AMP: f32 = 0.2;
+        let freq = 1_000.0f32;
+
+        // Engine EQ at default-flat vs the raw input level (a deck at unity
+        // volume, full crossfade on A, no EQ change) — the same code path with
+        // every band left at 0.5.
+        let mut engine = Engine::new();
+        let mut deck_a = engine.create_deck(0);
+        let _deck_b = engine.create_deck(1);
+        engine.set_crossfade(0.0);
+        let out_rms = deck_a_rms(&mut engine, &mut deck_a, freq, AMP);
+
+        // A pure sine at amplitude AMP has RMS = AMP/√2.
+        let in_rms = AMP / std::f32::consts::SQRT_2;
+        let db = 20.0 * (out_rms / in_rms).log10();
+        assert!(
+            db.abs() < 0.2,
+            "flat EQ should pass at unity, got {db:.3} dB"
+        );
+    }
+
+    /// (S2-2) Per-deck volume scales a deck's contribution linearly: deck A at
+    /// volume g produces g× the output of deck A at volume 1.0 (full crossfade on
+    /// A, sub-threshold so the limiter stays out of it).
+    #[test]
+    fn volume_scales_deck_contribution() {
+        const AMP: f32 = 0.2;
+        let freq = 440.0f32;
+        let g = 0.5f32;
+
+        let full = {
+            let mut engine = Engine::new();
+            let mut deck_a = engine.create_deck(0);
+            let _deck_b = engine.create_deck(1);
+            engine.set_crossfade(0.0);
+            deck_a_rms(&mut engine, &mut deck_a, freq, AMP)
+        };
+        let scaled = {
+            let mut engine = Engine::new();
+            let mut deck_a = engine.create_deck(0);
+            let _deck_b = engine.create_deck(1);
+            engine.set_crossfade(0.0);
+            engine.set_volume(0, g);
+            deck_a_rms(&mut engine, &mut deck_a, freq, AMP)
+        };
+
+        let ratio = scaled / full;
+        assert!(
+            (ratio - g).abs() < 1e-3,
+            "volume {g} should scale the contribution by {g}, got ratio {ratio}"
+        );
+    }
+
+    /// (S2-3a) Limiter ceiling invariant: a hot input (peaks well above the
+    /// ceiling) never produces |out| > MASTER_CEILING. This is the load-bearing
+    /// safety contract the clip guard guarantees.
+    #[test]
+    fn limiter_hot_input_never_exceeds_ceiling() {
+        let mut engine = Engine::new();
+        let mut deck_a = engine.create_deck(0);
+        let mut deck_b = engine.create_deck(1);
+        engine.set_crossfade(0.5);
+
+        // Full-scale sines on both decks — post-crossfade peaks ≈ √2 ≈ 1.41.
+        let mut sa = SineSource::new(220.0, 1.0);
+        let mut sb = SineSource::new(330.0, 1.0);
+        let prime = PREBUFFER_FRAMES + 2 * BLOCK;
+        feed(&mut deck_a, &mut sa, prime);
+        feed(&mut deck_b, &mut sb, prime);
+
+        let mut out = vec![0.0f32; BLOCK * CHANNELS as usize];
+        let mut max_out = 0.0f32;
+        for _ in 0..64 {
+            // ~0.34 s
+            feed(&mut deck_a, &mut sa, BLOCK);
+            feed(&mut deck_b, &mut sb, BLOCK);
+            engine.render(&mut out, BLOCK);
+            for &s in out.iter() {
+                assert!(
+                    s.abs() <= MASTER_CEILING + 1e-7,
+                    "hot input produced {s}, above the ceiling"
+                );
+                max_out = max_out.max(s.abs());
+            }
+        }
+        // Sanity: it really was loud enough to be limited (not trivially quiet).
+        assert!(max_out > 0.5, "hot test should drive a substantial level");
+    }
+
+    /// (S2-3b) Sub-threshold transparency: a quiet steady signal (peaks below the
+    /// −6 dB threshold) passes at unity within a small epsilon — proving the
+    /// makeup cancellation. Also (S2-3c): gain reduction is ~0 dB below
+    /// threshold.
+    #[test]
+    fn limiter_sub_threshold_is_transparent() {
+        let mut engine = Engine::new();
+        let mut deck_a = engine.create_deck(0);
+        let _deck_b = engine.create_deck(1);
+        let tele = engine.telemetry();
+        engine.set_crossfade(0.0); // full deck A
+
+        // Peak 0.3 < threshold 0.501 (−6 dB) → the limiter must not engage.
+        const AMP: f32 = 0.3;
+        let out_rms = deck_a_rms(&mut engine, &mut deck_a, 440.0, AMP);
+        let in_rms = AMP / std::f32::consts::SQRT_2;
+        let db = 20.0 * (out_rms / in_rms).log10();
+        assert!(
+            db.abs() < 0.2,
+            "sub-threshold signal must pass level-transparent, got {db:.3} dB"
+        );
+        // The gain-reduction meter should read ≈ 0 dB (idle) below threshold.
+        let gr = tele.master_gain_reduction_db();
+        assert!(
+            gr > -0.1,
+            "gain reduction must be ~0 dB below threshold, got {gr:.3} dB"
+        );
+    }
+
+    /// (S2-3c) Gain reduction engages above threshold: a hot input drives the
+    /// gain-reduction telemetry meaningfully negative.
+    #[test]
+    fn limiter_gain_reduction_engages_above_threshold() {
+        let mut engine = Engine::new();
+        let mut deck_a = engine.create_deck(0);
+        let _deck_b = engine.create_deck(1);
+        let tele = engine.telemetry();
+        engine.set_crossfade(0.0); // full deck A
+
+        // Peak 1.0 ≫ threshold 0.501 → strong reduction expected.
+        let mut src = SineSource::new(440.0, 1.0);
+        let prime = PREBUFFER_FRAMES + 2 * BLOCK;
+        feed(&mut deck_a, &mut src, prime);
+        let mut out = vec![0.0f32; BLOCK * CHANNELS as usize];
+        for _ in 0..32 {
+            feed(&mut deck_a, &mut src, BLOCK);
+            engine.render(&mut out, BLOCK);
+        }
+        let gr = tele.master_gain_reduction_db();
+        assert!(
+            gr < -1.0,
+            "a hot input must register gain reduction, got {gr:.2} dB"
+        );
+    }
+
+    /// (S2-3d) The gain-reduction meter `take_*` reads then resets to unity
+    /// (0 dB), like the peak meter — a UI reader sampling each frame.
+    #[test]
+    fn gain_reduction_meter_resets_on_take() {
+        let mut engine = Engine::new();
+        let mut deck_a = engine.create_deck(0);
+        let _deck_b = engine.create_deck(1);
+        let tele = engine.telemetry();
+        engine.set_crossfade(0.0);
+
+        let mut src = SineSource::new(440.0, 1.0);
+        let prime = PREBUFFER_FRAMES + 2 * BLOCK;
+        feed(&mut deck_a, &mut src, prime);
+        let mut out = vec![0.0f32; BLOCK * CHANNELS as usize];
+        for _ in 0..16 {
+            feed(&mut deck_a, &mut src, BLOCK);
+            engine.render(&mut out, BLOCK);
+        }
+        let taken = tele.take_master_gain_reduction_db();
+        assert!(taken < -1.0, "should have captured reduction, got {taken:.2} dB");
+        // After the take, the window is reset to unity until the next render.
+        assert!(
+            tele.master_gain_reduction_db() > -0.1,
+            "meter must reset to ~0 dB after take"
+        );
     }
 }
