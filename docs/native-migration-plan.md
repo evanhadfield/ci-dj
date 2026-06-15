@@ -73,7 +73,12 @@ unchanged); it keeps emitting protocol-v0 PCM+control. The React UI emits
 Three throwaway spikes, each with a pass/fail and a short measured write-up.
 **All three green → the ADRs move Proposed → Accepted and Phase 1 commits.**
 
-### Spike A — Rust audio core (`spike-rust-audio.md`)
+### Spike A — Rust audio core ([`spike-rust-audio.md`](spike-rust-audio.md))
+
+The full executable spec — verified reference constants, the `fundsp` coverage
+map, the precise parity method (bit-exact vs epsilon vs invariant), the RT-hazard
+checklist, and the transport metrics — lives in
+[`spike-rust-audio.md`](spike-rust-audio.md). In brief:
 
 Stand up `cpal` + `fundsp` + `rtrb` and feed two decks of real PCM (replay
 captured 48 kHz/stereo chunks, or a live sidecar from Spike B) → mix → device.
