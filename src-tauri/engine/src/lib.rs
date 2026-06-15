@@ -38,10 +38,12 @@
 
 mod fx;
 mod graph;
+mod playback;
 mod ring;
 pub mod telemetry;
 
 pub use fx::FxKind;
+pub use playback::{LoopRegion, TrackStatus};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod device;
@@ -49,6 +51,7 @@ pub mod device;
 use std::sync::Arc;
 
 use graph::MixGraph;
+use playback::{BufferSource, DeckSource};
 use ring::{new_deck_ring, RingConsumer, RingProducer};
 use telemetry::Telemetry;
 
@@ -147,7 +150,16 @@ impl DeckHandle {
 /// the mix graph, and the telemetry. [`Engine::render`] is the only RT entry
 /// point; everything else is non-RT control/setup.
 pub struct Engine {
-    decks: Vec<Option<RingConsumer>>,
+    /// Each deck's active source (ADR-0013): the live ring consumer
+    /// ([`DeckSource::Realtime`], Slices 1–3) or one decoded track
+    /// ([`DeckSource::Playback`]). `None` until [`Engine::create_deck`].
+    decks: Vec<Option<DeckSource>>,
+    /// The live ring consumer **parked** while a deck is in Playback mode
+    /// (ADR-0013: the live ring is kept, not destroyed). `load_track` moves the
+    /// `Realtime` consumer here and installs a `Playback` source; `unload_track`
+    /// moves it back. The matching producer ([`DeckHandle`]) keeps feeding it; the
+    /// engine just stops draining it until the deck returns to Realtime.
+    parked_rings: Vec<Option<RingConsumer>>,
     graph: MixGraph,
     telemetry: Arc<Telemetry>,
 }
@@ -159,14 +171,17 @@ impl Engine {
     pub fn new() -> Self {
         Engine {
             decks: (0..DECK_COUNT).map(|_| None).collect(),
+            parked_rings: (0..DECK_COUNT).map(|_| None).collect(),
             graph: MixGraph::new(),
             telemetry: Arc::new(Telemetry::new()),
         }
     }
 
     /// Create deck `id` and return its non-RT [`DeckHandle`] (the producer side).
-    /// The consumer side is retained inside the engine for [`Engine::render`].
-    /// Allocates the ring backing store once, here, off the RT path.
+    /// The consumer side is retained inside the engine for [`Engine::render`], as
+    /// a [`DeckSource::Realtime`] source (the live stream — loading later switches
+    /// it to Playback). Allocates the ring backing store once, here, off the RT
+    /// path.
     ///
     /// # Panics
     /// Panics if `index >= DECK_COUNT` or the deck was already created — both are
@@ -178,7 +193,7 @@ impl Engine {
             "deck {index} already created"
         );
         let (producer, consumer) = new_deck_ring(index, self.telemetry.clone());
-        self.decks[index] = Some(consumer);
+        self.decks[index] = Some(DeckSource::Realtime(consumer));
         DeckHandle {
             id: DeckId(index),
             producer,
@@ -248,6 +263,159 @@ impl Engine {
         self.graph.set_fx_amount(deck_index, amount);
     }
 
+    // --- Slice 4a: the playback deck (M19/M20/M21/M23, ADR-0013…0016) ---
+    //
+    // Loading decides the mode (ADR-0013): `load_track` switches a deck to
+    // Playback and PARKS its live ring; `unload_track` restores Realtime. All of
+    // these are non-RT (`&mut self`, like `set_eq`/`set_fx`) — they cannot overlap
+    // a `render` call by Rust's ownership rules, so the buffer allocation in
+    // `load_track` and the transport mutations never land on the RT thread. The RT
+    // `render` only reads the buffer + linear-interpolates.
+
+    /// Load a decoded track onto a deck, switching it to Playback mode and
+    /// **parking** its live ring (ADR-0013). `samples` is decoded interleaved
+    /// stereo f32 at [`SAMPLE_RATE`] (the shell decodes WAV + resamples in Phase
+    /// 2; this slice takes 48 k f32). Replaces any track already loaded. The track
+    /// starts paused at the top, rate 1.0, no loop.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT` (a caller programming error).
+    pub fn load_track(&mut self, deck_index: usize, samples: Vec<f32>) {
+        assert!(deck_index < DECK_COUNT, "deck index {deck_index} out of range");
+        let source = BufferSource::new(samples);
+        match self.decks[deck_index].take() {
+            // Park the live ring (kept, not destroyed) so `unload_track` restores
+            // it. Its producer keeps feeding; the engine just stops draining it.
+            Some(DeckSource::Realtime(ring)) => {
+                self.parked_rings[deck_index] = Some(ring);
+            }
+            // Reloading a Playback deck: drop the old track, keep any parked ring.
+            Some(DeckSource::Playback(_)) | None => {}
+        }
+        self.decks[deck_index] = Some(DeckSource::Playback(source));
+    }
+
+    /// Unload the track and return the deck to Realtime, restoring the parked live
+    /// ring (ADR-0013). A no-op on a deck that is already Realtime or uncreated.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT` (a caller programming error).
+    pub fn unload_track(&mut self, deck_index: usize) {
+        assert!(deck_index < DECK_COUNT, "deck index {deck_index} out of range");
+        if let Some(DeckSource::Playback(_)) = self.decks[deck_index] {
+            self.decks[deck_index] = self.parked_rings[deck_index].take().map(DeckSource::Realtime);
+        }
+    }
+
+    /// Start (or resume) the loaded track; from the ended state it restarts at the
+    /// top (ADR-0013). A no-op unless the deck is in Playback mode.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT`.
+    pub fn play_track(&mut self, deck_index: usize) {
+        if let Some(track) = self.track_mut(deck_index) {
+            track.play();
+        }
+    }
+
+    /// Park the track's playhead where it is (ADR-0013). A no-op off Playback.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT`.
+    pub fn pause_track(&mut self, deck_index: usize) {
+        if let Some(track) = self.track_mut(deck_index) {
+            track.pause();
+        }
+    }
+
+    /// Jump the track playhead to `frames` (clamped into the track) and **exit any
+    /// active loop** — the one rule (ADR-0015). A no-op off Playback.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT`.
+    pub fn seek_track(&mut self, deck_index: usize, frames: f64) {
+        if let Some(track) = self.track_mut(deck_index) {
+            track.seek(frames);
+        }
+    }
+
+    /// Set the track's varispeed rate, clamped to the ±8 % envelope (ADR-0014).
+    /// A no-op off Playback.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT`.
+    pub fn set_track_rate(&mut self, deck_index: usize, rate: f64) {
+        if let Some(track) = self.track_mut(deck_index) {
+            track.set_rate(rate);
+        }
+    }
+
+    /// Set the track loop region in frames (ADR-0015/0016). Runs the pure
+    /// `plan_loop_set` decision; a region that cannot loop is refused. A no-op off
+    /// Playback.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT`.
+    pub fn set_track_loop(&mut self, deck_index: usize, start: u64, end: u64) {
+        if let Some(track) = self.track_mut(deck_index) {
+            track.set_loop(start, end);
+        }
+    }
+
+    /// Clear the active track loop, re-anchoring on the folded seam (ADR-0015). A
+    /// no-op off Playback.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT`.
+    pub fn clear_track_loop(&mut self, deck_index: usize) {
+        if let Some(track) = self.track_mut(deck_index) {
+            track.clear_loop();
+        }
+    }
+
+    /// A snapshot of the track's transport (playhead in frames, playing, duration,
+    /// rate, ended, loop), or `None` off Playback. Mirrors `getTrackStatus`.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT`.
+    pub fn get_track_status(&self, deck_index: usize) -> Option<TrackStatus> {
+        self.track_ref(deck_index).map(|track| track.status())
+    }
+
+    /// Min/max overview of the loaded track for the waveform UI (`buckets`
+    /// downsampled buckets across both channels), or `None` off Playback.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT`.
+    pub fn get_track_peaks(&self, deck_index: usize, buckets: usize) -> Option<(Vec<f32>, Vec<f32>)> {
+        self.track_ref(deck_index).map(|track| track.peaks(buckets))
+    }
+
+    /// The active Playback source for a deck, or `None` if the deck is Realtime /
+    /// uncreated. Shared accessor for the track control methods.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT`.
+    fn track_mut(&mut self, deck_index: usize) -> Option<&mut BufferSource> {
+        assert!(deck_index < DECK_COUNT, "deck index {deck_index} out of range");
+        match self.decks[deck_index].as_mut() {
+            Some(DeckSource::Playback(track)) => Some(track),
+            _ => None,
+        }
+    }
+
+    /// Read-only sibling of [`Engine::track_mut`].
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT`.
+    fn track_ref(&self, deck_index: usize) -> Option<&BufferSource> {
+        assert!(deck_index < DECK_COUNT, "deck index {deck_index} out of range");
+        match self.decks[deck_index].as_ref() {
+            Some(DeckSource::Playback(track)) => Some(track),
+            _ => None,
+        }
+    }
+
     /// Shared telemetry handle. Cheap to clone (`Arc`); a UI/monitor thread can
     /// hold one and read stats while `render` runs — all reads are wait-free.
     pub fn telemetry(&self) -> Arc<Telemetry> {
@@ -271,20 +439,27 @@ impl Engine {
         );
         self.telemetry.note_block();
 
-        // Per-block accounting first (prebuffer gate, fill stats, underruns),
-        // then the per-frame drain + mix.
+        // Per-block accounting first (prebuffer gate, fill stats, underruns) for
+        // the live (Realtime) decks only — a Playback deck reads a finished buffer
+        // with no ring to prime or starve. Then the per-frame drain + mix.
         for deck in self.decks.iter_mut().flatten() {
-            deck.account_block(frames);
+            if let DeckSource::Realtime(ring) = deck {
+                ring.account_block(frames);
+            }
         }
 
         let mut master_peak = 0.0f32;
         let mut min_gain = 1.0f32;
         for f in 0..frames {
-            // Pop one stereo frame from each deck (zero-fill on shortfall).
+            // Pop one stereo frame from each deck's active source (zero-fill on a
+            // ring shortfall; silence for a paused/ended track).
             let mut pairs = [(0.0f32, 0.0f32); DECK_COUNT];
             for (d, slot) in self.decks.iter_mut().enumerate() {
                 if let Some(deck) = slot {
-                    pairs[d] = deck.pop_frame();
+                    pairs[d] = match deck {
+                        DeckSource::Realtime(ring) => ring.pop_frame(),
+                        DeckSource::Playback(track) => track.pop_frame(),
+                    };
                 }
             }
 
@@ -990,5 +1165,210 @@ mod tests {
             "lowpass must pass low far more than high (Δ {:.2} dB)",
             low_db - high_db
         );
+    }
+
+    // --- Slice 4a tests: the playback deck wired into the engine ---
+    //
+    // The BufferSource transport (rate-1.0 verbatim, varispeed resampling, loop
+    // fold, seek-exits-loop, pause, peaks, plan_loop_set edges) is unit-tested in
+    // `playback.rs` against the `track.ts` / `engine.ts` behaviour. These tests
+    // verify the SOURCE abstraction is wired into `Engine`/`render` correctly: a
+    // load switches the deck to Playback and parks the ring, a Realtime deck is
+    // unaffected, the mixed output carries the track frame through the unchanged
+    // channel, and `render` stays alloc-free with a Playback source in path.
+
+    /// A flat ramp track buffer: L = frame index, R = its negation, so the source
+    /// frame is unambiguous after the (flat) channel arithmetic.
+    fn ramp_track(frames: usize) -> Vec<f32> {
+        let mut buf = vec![0.0f32; frames * CHANNELS as usize];
+        for f in 0..frames {
+            buf[2 * f] = f as f32;
+            buf[2 * f + 1] = -(f as f32);
+        }
+        buf
+    }
+
+    /// (S4-1) `load_track` switches the deck to Playback and a Realtime deck is
+    /// unaffected: deck A loads a track (status Some), deck B stays Realtime
+    /// (status None) and still drains its ring.
+    #[test]
+    fn load_track_switches_mode_and_leaves_realtime_deck_alone() {
+        let mut engine = Engine::new();
+        let _deck_a = engine.create_deck(0);
+        let mut deck_b = engine.create_deck(1);
+
+        assert!(engine.get_track_status(0).is_none(), "deck A starts Realtime");
+        engine.load_track(0, ramp_track(1000));
+        let status = engine.get_track_status(0).expect("deck A is now Playback");
+        assert_eq!(status.duration_frames, 1000);
+        assert!(!status.playing, "a fresh track loads paused at the top");
+
+        // Deck B is still Realtime: no track status, and its ring still feeds.
+        assert!(engine.get_track_status(1).is_none(), "deck B stays Realtime");
+        let mut sb = SineSource::new(330.0, 0.25);
+        feed(&mut deck_b, &mut sb, PREBUFFER_FRAMES + BLOCK);
+        let tele = engine.telemetry();
+        let mut out = vec![0.0f32; BLOCK * CHANNELS as usize];
+        for _ in 0..8 {
+            feed(&mut deck_b, &mut sb, BLOCK);
+            engine.render(&mut out, BLOCK);
+        }
+        assert!(tele.primed(1), "the Realtime deck B still primes and drains its ring");
+    }
+
+    /// (S4-2) A loaded, playing track is pulled through `render`: crossfaded fully
+    /// to the playback deck, the mixed output reproduces the track's ramp frames
+    /// (within the flat-channel epsilon). A paused track is silent.
+    #[test]
+    fn render_pulls_the_playback_source() {
+        let mut engine = Engine::new();
+        let _deck_a = engine.create_deck(0);
+        let _deck_b = engine.create_deck(1);
+        engine.set_crossfade(0.0); // full deck A so the track is the whole mix
+
+        // A small-amplitude ramp keeps the mix sub-threshold (the limiter idle)
+        // and EQ near-unity: frame f maps to 0.2 * (f / N) in both channels.
+        const N: usize = 1024;
+        let track = |frames: usize| {
+            let mut buf = vec![0.0f32; frames * CHANNELS as usize];
+            for f in 0..frames {
+                let s = 0.2 * (f as f32 / frames as f32);
+                buf[2 * f] = s;
+                buf[2 * f + 1] = s;
+            }
+            buf
+        };
+
+        // Paused: render is silent.
+        engine.load_track(0, track(N));
+        let mut out = vec![0.0f32; N * CHANNELS as usize];
+        engine.render(&mut out, N);
+        assert!(out.iter().all(|&s| s == 0.0), "a paused track renders silence");
+
+        // Playing from the top: the output follows the track ramp, full deck A
+        // (cos(0) = 1). The flat EQ/limiter chain is near-unity sub-threshold, so
+        // the ramp shows within a small biquad-settling epsilon — checked past the
+        // first few frames where the EQ filters are still warming up.
+        engine.load_track(0, track(N));
+        engine.play_track(0);
+        engine.render(&mut out, N);
+        let mut max_err = 0.0f32;
+        for f in 64..N {
+            let want = 0.2 * (f as f32 / N as f32);
+            max_err = max_err.max((out[2 * f] - want).abs());
+        }
+        assert!(max_err < 2e-3, "the track ramp must reach the mix output, max err {max_err}");
+    }
+
+    /// (S4-3) `unload_track` returns the deck to Realtime and restores the parked
+    /// ring: after unload the deck has no track status and the live ring (fed
+    /// throughout) drains again.
+    #[test]
+    fn unload_track_restores_the_parked_ring() {
+        let mut engine = Engine::new();
+        let mut deck_a = engine.create_deck(0);
+        let _deck_b = engine.create_deck(1);
+        let tele = engine.telemetry();
+
+        // Prime the ring, then load a track — the ring is PARKED, not destroyed.
+        let mut sa = SineSource::new(220.0, 0.25);
+        feed(&mut deck_a, &mut sa, PREBUFFER_FRAMES + 4 * BLOCK);
+        engine.load_track(0, ramp_track(1000));
+        assert!(engine.get_track_status(0).is_some(), "deck A is in Playback");
+
+        // The producer keeps feeding the parked ring across playback.
+        let mut out = vec![0.0f32; BLOCK * CHANNELS as usize];
+        for _ in 0..4 {
+            feed(&mut deck_a, &mut sa, BLOCK);
+            engine.render(&mut out, BLOCK);
+        }
+
+        // Unload: back to Realtime, no track status, and the ring drains again.
+        engine.unload_track(0);
+        assert!(engine.get_track_status(0).is_none(), "unload returns to Realtime");
+        let under_before = tele.underruns();
+        for _ in 0..4 {
+            feed(&mut deck_a, &mut sa, BLOCK);
+            engine.render(&mut out, BLOCK);
+        }
+        assert_eq!(
+            tele.underruns(),
+            under_before,
+            "the restored ring (still fed) must not underrun"
+        );
+    }
+
+    /// (S4-4) Engine-level track controls map to the source: play/seek/rate/loop
+    /// are reflected in `get_track_status`, and a seek exits a loop (ADR-0015).
+    #[test]
+    fn engine_track_controls_reach_the_source() {
+        let mut engine = Engine::new();
+        let _deck_a = engine.create_deck(0);
+        let _deck_b = engine.create_deck(1);
+        engine.load_track(0, ramp_track(20_000));
+
+        engine.play_track(0);
+        engine.set_track_rate(0, 1.05);
+        let s = engine.get_track_status(0).unwrap();
+        assert!(s.playing);
+        assert!((s.rate - 1.05).abs() < 1e-9);
+
+        // A valid loop installs; a seek exits it (the one rule).
+        engine.set_track_loop(0, 5_000, 9_000);
+        assert!(engine.get_track_status(0).unwrap().loop_region.is_some());
+        engine.seek_track(0, 12_000.0);
+        let s = engine.get_track_status(0).unwrap();
+        assert_eq!(s.loop_region, None, "any seek exits the loop");
+        assert_eq!(s.playhead, 12_000.0);
+
+        engine.pause_track(0);
+        assert!(!engine.get_track_status(0).unwrap().playing, "pause stops the transport");
+
+        // Peaks come through the engine API too.
+        let (min, max) = engine.get_track_peaks(0, 16).unwrap();
+        assert_eq!(min.len(), 16);
+        assert_eq!(max.len(), 16);
+        assert!(max.iter().any(|&v| v > 0.0), "the ramp's max overview is non-trivial");
+
+        // Track controls on a Realtime deck are inert (no panic, no status).
+        engine.play_track(1);
+        engine.set_track_rate(1, 1.05);
+        assert!(engine.get_track_status(1).is_none(), "a Realtime deck has no track");
+    }
+
+    /// (S4-5) `render` runs cleanly with both source kinds in path over many
+    /// blocks: a Playback deck (looping, varispeed) on B and a primed Realtime
+    /// deck on A, mixed through the unchanged channel. Alloc-freeness of the RT
+    /// path is structural (the playback `pop_frame` only reads the buffer +
+    /// interpolates — no Vec/Box), the same discipline Slices 1–3 hold; the
+    /// armed `assert_no_alloc` guard runs in the `device_run` binary and on
+    /// hardware (the lib's warn-only feature set makes a CI guard a no-op assert).
+    #[test]
+    fn render_runs_with_both_source_kinds() {
+        let mut engine = Engine::new();
+        let mut deck_a = engine.create_deck(0); // Realtime, fed below
+        let _deck_b = engine.create_deck(1);
+        engine.set_crossfade(0.5);
+
+        engine.load_track(1, ramp_track(48_000));
+        engine.play_track(1);
+        engine.set_track_loop(1, 6_000, 12_000);
+        engine.set_track_rate(1, 1.03);
+
+        let mut sa = SineSource::new(220.0, 0.25);
+        feed(&mut deck_a, &mut sa, PREBUFFER_FRAMES + 64 * BLOCK);
+
+        let mut out = vec![0.0f32; BLOCK * CHANNELS as usize];
+        for _ in 0..32 {
+            feed(&mut deck_a, &mut sa, BLOCK);
+            engine.render(&mut out, BLOCK);
+            for &s in out.iter() {
+                assert!(s.abs() <= MASTER_CEILING + 1e-7, "ceiling held with a playback deck");
+                assert!(s.is_finite(), "no NaN/Inf from the mixed playback path");
+            }
+        }
+        // The looping varispeed track keeps its playhead inside the region.
+        let p = engine.get_track_status(1).unwrap().playhead;
+        assert!((6_000.0..12_000.0).contains(&p), "the looped track folds inside the region, got {p}");
     }
 }
