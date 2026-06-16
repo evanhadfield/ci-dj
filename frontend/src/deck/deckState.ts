@@ -55,6 +55,10 @@ export type DeckAction =
   | { type: 'play_requested' }
   | { type: 'stop_requested' }
   | { type: 'local_error'; error: string }
+  // The available-models list + RAM info, on its own (the native shell fetches it
+  // from the generation server — there is no `/ws/deck` hello to carry it). Sets
+  // only the picker data, never the per-deck model / switch / style state.
+  | { type: 'deck_info'; models: string[]; ramInfo: RamInfo }
 
 export type DeckState = {
   connection: 'connecting' | 'open' | 'closed'
@@ -113,6 +117,8 @@ export function deckReducer(state: DeckState, action: DeckAction): DeckState {
       return { ...state, playing: false }
     case 'local_error':
       return { ...state, error: action.error }
+    case 'deck_info':
+      return { ...state, availableModels: action.models, ramInfo: action.ramInfo }
     case 'worklet_stats':
       return {
         ...state,

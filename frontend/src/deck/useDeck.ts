@@ -440,7 +440,26 @@ export function useDeck(deckId: DeckId): DeckControls {
         loudness.push(samples)
         bandScroller.push(samples)
       })
+      // The model list + RAM info come from the generation server (no `/ws/deck`
+      // hello in native) so the model picker populates and the RAM warning works.
+      let cancelled = false
+      void getApiBaseUrl()
+        .then((base) => fetch(`${base}/api/models`))
+        .then((response) => (response.ok ? response.json() : null))
+        .then((info) => {
+          if (cancelled || !info) return
+          dispatch({
+            type: 'deck_info',
+            models: info.models,
+            ramInfo: {
+              totalGb: info.total_ram_gb,
+              estimateGbByModel: info.model_ram_estimate_gb,
+            },
+          })
+        })
+        .catch(() => {})
       return () => {
+        cancelled = true
         unsubscribeStatus()
         unsubscribePcm()
         channelRef.current?.dispose()

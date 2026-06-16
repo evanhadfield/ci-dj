@@ -676,3 +676,17 @@ def test_generation_only_skips_deck_workers(monkeypatch):
 
     assert spawned == []
     assert controller.decks == {}
+
+
+def test_models_endpoint_returns_list_and_ram(client, monkeypatch):
+    """The native model picker fetches /api/models (no /ws/deck hello in native)."""
+    monkeypatch.setattr(
+        controller.engine, "available_models", lambda: ["mrt2_small", "mrt2_base"]
+    )
+    response = client.get("/api/models")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["models"] == ["mrt2_small", "mrt2_base"]
+    assert body["sample_rate"] == 48000
+    assert body["total_ram_gb"] > 0
+    assert "mrt2_small" in body["model_ram_estimate_gb"]

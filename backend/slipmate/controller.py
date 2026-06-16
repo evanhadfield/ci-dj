@@ -650,6 +650,22 @@ async def generate_audio(request: Request) -> Response:
     return Response(content=wav, media_type="audio/wav")
 
 
+@app.get("/api/models")
+def list_models() -> dict:
+    """The downloaded models + RAM info for the deck UI's model picker and the
+    "this combination looks tight" warning — the same fields the `/ws/deck` hello
+    carries. In the native shell the realtime decks live in the Rust sidecars (no
+    `/ws/deck`), so the webview fetches this from the generation server instead."""
+    return {
+        "models": engine.available_models(),
+        "sample_rate": engine.SAMPLE_RATE,
+        "channels": engine.CHANNELS,
+        "chunk_seconds": engine.CHUNK_SECONDS,
+        "total_ram_gb": round(_total_ram_gb(), 1),
+        "model_ram_estimate_gb": MODEL_RAM_ESTIMATE_GB,
+    }
+
+
 # The browser cue sink (ADR-0007, `/ws/cue` + `/api/cue/outputs`) was retired at
 # the native cutover (Phase 2 part 7): the native shell routes the cue to the FLX4
 # phones (channels 3/4) inside the Rust engine (Slice 5), so no backend

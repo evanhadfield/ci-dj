@@ -147,4 +147,17 @@ describe('deckReducer', () => {
     expect(state.playing).toBe(false)
     expect(state.connection).toBe('closed')
   })
+
+  it('deck_info sets the model list + RAM without touching model/switch/style', () => {
+    const ramInfo = { totalGb: 32, estimateGbByModel: { mrt2_small: 2 } }
+    const state = reduce([
+      { type: 'server_event', event: { event: 'ready', deck: 'a', model: 'mrt2_small' } },
+      { type: 'deck_info', models: ['mrt2_small', 'mrt2_base'], ramInfo },
+    ])
+    expect(state.availableModels).toEqual(['mrt2_small', 'mrt2_base'])
+    expect(state.ramInfo).toEqual(ramInfo)
+    // The ready event's model + cleared switch flag are untouched.
+    expect(state.model).toBe('mrt2_small')
+    expect(state.switchingModel).toBe(false)
+  })
 })
