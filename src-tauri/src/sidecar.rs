@@ -74,12 +74,20 @@ impl PcmTaps {
     /// callback). Drops the subscriber on a send error so a dead webview channel
     /// never wedges the reader.
     pub fn send(&self, deck: usize, bytes: &[u8]) {
-        if let Some(slot) = self.decks.get(deck) {
-            let mut guard = slot.lock().unwrap_or_else(|p| p.into_inner());
-            if let Some(channel) = guard.as_ref() {
-                if channel.send(InvokeResponseBody::Raw(bytes.to_vec())).is_err() {
-                    *guard = None;
-                }
+        let Some(slot) = self.decks.get(deck) else {
+            return;
+        };
+        // Clone the channel handle out from UNDER the lock, then send without
+        // holding it. `channel.send` delivers to the webview (it needs the main
+        // thread), and the main thread also takes this lock to (un)subscribe — so
+        // holding the lock across the send deadlocks the reader (holding the lock,
+        // awaiting the webview) against a subscribe on the main thread (awaiting the
+        // lock). That wedged the model-switch reader join: the reader never exited,
+        // so the restart hung holding the deck-slot mutex.
+        let channel = slot.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(channel) = channel {
+            if channel.send(InvokeResponseBody::Raw(bytes.to_vec())).is_err() {
+                *slot.lock().unwrap_or_else(|p| p.into_inner()) = None;
             }
         }
     }
@@ -374,10 +382,16 @@ impl Sidecar {
         let (listener, child) = bind_and_launch(&self.deck_id, new_model)?;
 
         // `stop` suppresses the old reader's `worker_died` across the deliberate
-        // switch; killing the old child closes its socket (and the stop flag wakes a
-        // never-connected accept), so the join returns promptly.
+        // switch (and wakes a never-connected accept).
         self.stop.store(true, Ordering::Release);
-        *self.control.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        // SHUT DOWN the control socket — do not merely drop our clone. The reader
+        // holds its own dup of this FD (`try_clone`), so dropping the writer leaves
+        // the socket open and the reader blocked in `read_frame`; `shutdown` tears
+        // down the SHARED socket so the reader's read returns EOF at once (and
+        // signals the old sidecar to exit). The child kill then terminates it.
+        if let Some(writer) = self.control.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            let _ = writer.shutdown(std::net::Shutdown::Both);
+        }
         if let Some(mut old) = self.child.lock().unwrap_or_else(|p| p.into_inner()).take() {
             let _ = old.kill();
             let _ = old.wait();
