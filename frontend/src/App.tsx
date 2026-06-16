@@ -371,7 +371,12 @@ function App() {
 
   return (
     <main className="app">
-      {/* Drag the window by the header. `deep` makes the whole subtree a drag
+      {/* The frameless title-bar strip behind the macOS traffic lights. With
+          titleBarStyle Overlay the webview covers the native title bar, so that
+          top strip is webview content and needs its OWN drag region — an empty,
+          transparent surface over the top inset. */}
+      <div className="app__titlebar" data-tauri-drag-region aria-hidden="true" />
+      {/* Drag the window by the header too. `deep` makes the whole subtree a drag
           surface (logo, gaps, status text); Tauri auto-excludes clickable
           elements (the native selects, the MIDI button) so they stay clickable. */}
       <header className="app__statusbar" data-tauri-drag-region="deep">
