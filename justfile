@@ -60,14 +60,16 @@ build:
     cd frontend && npm run build
 
 # Native shell: run the full native app in dev — the Rust audio engine (cpal) +
-# the per-deck Python inference sidecars + the sa3 generation server. Builds the
-# frontend first (tauri.conf.json's beforeBuildCommand) and embeds frontend/dist.
-# Needs cargo-tauri (`cargo install tauri-cli@^2`) and the backend deps + model
-# weights (`just setup`). The default `uv run` sidecar/generation commands use the
-# backend project dir; override with SLIPMATE_SIDECAR_CMD / SLIPMATE_GENERATION_CMD
-# (e.g. the packaged binaries). For UI-only iteration without inference, use
-# `just dev-frontend` (the browser/Web Audio path).
-tauri-dev:
+# the per-deck Python inference sidecars + the sa3 generation server. The `build`
+# dependency rebuilds frontend/dist first (the webview loads it via frontendDist);
+# this must happen here, not in tauri.conf's beforeDevCommand, because Tauri runs
+# that hook from the repo root and a fresh dist is required or the decks hang in
+# 'Connecting'. Needs cargo-tauri (`cargo install tauri-cli@^2`) and the backend
+# deps + model weights (`just setup`). The default `uv run` sidecar/generation
+# commands use the backend project dir; override with SLIPMATE_SIDECAR_CMD /
+# SLIPMATE_GENERATION_CMD (e.g. the packaged binaries). For UI-only iteration
+# without inference, use `just dev-frontend` (the browser/Web Audio path).
+tauri-dev: build
     cd src-tauri && SLIPMATE_SIDECARS=1 cargo tauri dev
 
 # Freeze the Python inference sidecar into a ONEDIR binary for bundling
@@ -77,10 +79,11 @@ freeze-sidecar:
     ./scripts/freeze-sidecar.sh
 
 # Native shell (Phase 2): build + bundle the Tauri app (.app/.dmg) into
-# src-tauri/target/release/bundle/. Codesign + notarize when the APPLE_* env vars
+# src-tauri/target/release/bundle/. The `build` dependency rebuilds frontend/dist
+# first (embedded via frontendDist). Codesign + notarize when the APPLE_* env vars
 # are set (docs/native-packaging.md §3). Needs cargo-tauri
 # (`cargo install tauri-cli@^2`); bundle the sidecar first with `freeze-sidecar`.
-tauri-build:
+tauri-build: build
     cd src-tauri && cargo tauri build
 
 # Run the app: backend on http://127.0.0.1:8000 serving the built frontend.
