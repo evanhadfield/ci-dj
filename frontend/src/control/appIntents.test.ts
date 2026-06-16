@@ -94,7 +94,6 @@ describe('applyAppIntent', () => {
   })
 
   it.each([
-    ['disconnected', { connection: 'closed' as const }],
     ['loading a model', { switchingModel: true }],
     ['crashed', { workerDied: true }],
   ])('refuses play_toggle while the deck is %s', (_label, state) => {

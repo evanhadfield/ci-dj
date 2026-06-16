@@ -1,12 +1,11 @@
 /** Last-used settings in localStorage, so a reload picks up where the
  * session left off. Tolerant on read: anything malformed loads as absent. */
 
-import type { DeckId } from './audio/engine'
+import type { DeckId } from './audio/types'
 import { EQ_BANDS, type EqBand } from './audio/eq'
 import { FX_KINDS, type FxKind } from './audio/fx'
 import { LOOP_LENGTH_OPTIONS } from './audio/loops'
 import { TRIM_RANGE_DB } from './audio/master'
-import type { AudioOutputDevice } from './audio/outputs'
 import type { PadPoint } from './deck/padWeights'
 import { clamp01, isPoint, parsePreset, type StylePreset } from './presets'
 
@@ -34,9 +33,11 @@ export type AccentTheme = 'lime' | 'violet' | 'cyan'
 export type AppSettings = {
   crossfade: number
   cueMix: number
-  cueDevice: AudioOutputDevice | null
   beatView: BeatViewLayout
   accent: AccentTheme
+  /** Last-chosen native output device, by name (M-cutover). The device
+   * may be gone on reload, so applying it is best-effort. */
+  outputDevice: string
 }
 
 const STORAGE_KEY = 'slipmate:v1'
@@ -165,19 +166,8 @@ export function loadAppSettings(): Partial<AppSettings> {
   ) {
     settings.accent = stored.accent
   }
-  const cueDevice = stored.cueDevice
-  if (cueDevice === null) {
-    settings.cueDevice = null
-  } else if (
-    cueDevice &&
-    typeof cueDevice.deviceId === 'string' &&
-    typeof cueDevice.label === 'string'
-  ) {
-    settings.cueDevice = {
-      deviceId: cueDevice.deviceId,
-      label: cueDevice.label,
-      ...(cueDevice.backend === true ? { backend: true } : {}),
-    }
+  if (typeof stored.outputDevice === 'string' && stored.outputDevice) {
+    settings.outputDevice = stored.outputDevice
   }
   return settings
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { DeckId } from '../audio/engine'
+import type { DeckId } from '../audio/types'
 import { FX_KINDS, fxRestPosition, type FxKind } from '../audio/fx'
 import { LOOP_LENGTH_OPTIONS, LOOP_SLOT_COUNT } from '../audio/loops'
 import { useControlBus } from '../control/busContext'
@@ -278,11 +278,9 @@ export function DeckColumn({
       ? 'deck.status.frozen'
       : primed && connected
         ? 'deck.status.primed'
-        : {
-            connecting: 'deck.status.connecting',
-            open: 'deck.status.connected',
-            closed: 'deck.status.disconnected',
-          }[state.connection]
+        : state.connection === 'open'
+          ? 'deck.status.connected'
+          : 'deck.status.connecting'
   const bufferFraction = state.bufferedSeconds / BUFFER_TARGET_SECONDS
   const bufferTone =
     !state.playing || bufferFraction >= 0.5 ? 'ok' : bufferFraction >= 0.25 ? 'warn' : 'danger'

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { DeckId } from '../audio/engine'
+import type { DeckId } from '../audio/types'
 import { createControlBus, type ControlBus } from '../control/bus'
 import { ControlBusProvider } from '../control/ControlBusProvider'
 import type { StylePreset } from '../presets'
@@ -233,51 +233,81 @@ describe('MediaExplorer', () => {
     ).toBeInTheDocument()
   })
 
-  it('says so when folder browsing is unsupported', () => {
-    renderExplorer()
-    fireEvent.click(screen.getByRole('tab', { name: 'Folder' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }))
-    expect(
-      screen.getByText(
-        "Folder browsing needs Chromium's File System Access API",
-      ),
-    ).toBeInTheDocument()
-  })
-
-  it('lists a chosen folder’s audio files and loads one', async () => {
+  it('uses the native picker + Rust commands under Tauri', async () => {
     const wav = new ArrayBuffer(8)
-    const fileHandle = (name: string) => ({
-      kind: 'file',
-      name,
-      getFile: async () => ({ arrayBuffer: async () => wav }),
+    // Record (cmd, args) so the read's scoped {dir, name} can be asserted.
+    const calls: { cmd: string; args: unknown }[] = []
+    const invoke = vi.fn(async (cmd: string, args?: unknown) => {
+      calls.push({ cmd, args })
+      if (cmd === 'plugin:dialog|open') return '/Users/dj/DJ Sets'
+      if (cmd === 'list_audio_files') return ['a-side.mp3', 'b-side.wav']
+      if (cmd === 'read_audio_file') return wav
+      return undefined
     })
-    vi.stubGlobal(
-      'showDirectoryPicker',
-      vi.fn(async () => ({
-        name: 'DJ Sets',
-        values: () =>
-          (async function* () {
-            yield fileHandle('b-side.wav')
-            yield { kind: 'file', name: 'notes.txt' }
-            yield fileHandle('a-side.mp3')
-          })(),
-      })),
-    )
+    // Presence of `__TAURI__` is what isTauri() keys on; its core.invoke is the bridge.
+    vi.stubGlobal('__TAURI__', { core: { invoke } })
     const onLoadTrack = vi.fn(async () => true)
     renderExplorer({ onLoadTrack })
     fireEvent.click(screen.getByRole('tab', { name: 'Folder' }))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }))
     })
+    // The picked path's basename shows, and the Rust listing populates.
     expect(screen.getByText('DJ Sets')).toBeInTheDocument()
-    expect(screen.queryByText('notes.txt')).toBeNull()
-    // Sorted: the mp3 lands first despite arriving second.
+    expect(screen.getByText('a-side.mp3')).toBeInTheDocument()
     await act(async () => {
       fireEvent.click(
         screen.getByRole('button', { name: 'Load a-side.mp3 to deck A' }),
       )
     })
+    // Read is scoped: the command gets the chosen dir + the plain name, not a path.
+    const readCall = calls.find((c) => c.cmd === 'read_audio_file')
+    expect(readCall?.args).toEqual({ dir: '/Users/dj/DJ Sets', name: 'a-side.mp3' })
     expect(onLoadTrack).toHaveBeenCalledWith('a', wav, 'a-side.mp3')
+  })
+
+  it('dismissing the native picker lists nothing and shows no error', async () => {
+    const invoke = vi.fn(async (cmd: string) =>
+      cmd === 'plugin:dialog|open' ? null : undefined,
+    )
+    vi.stubGlobal('__TAURI__', { core: { invoke } })
+    renderExplorer()
+    fireEvent.click(screen.getByRole('tab', { name: 'Folder' }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }))
+    })
+    expect(invoke.mock.calls.some((c) => c[0] === 'list_audio_files')).toBe(false)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('trims a trailing slash from the native folder name', async () => {
+    const invoke = vi.fn(async (cmd: string) => {
+      if (cmd === 'plugin:dialog|open') return '/Users/dj/My Sets/'
+      if (cmd === 'list_audio_files') return []
+      return undefined
+    })
+    vi.stubGlobal('__TAURI__', { core: { invoke } })
+    renderExplorer()
+    fireEvent.click(screen.getByRole('tab', { name: 'Folder' }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }))
+    })
+    expect(screen.getByText('My Sets')).toBeInTheDocument()
+  })
+
+  it('surfaces a native listing error', async () => {
+    const invoke = vi.fn(async (cmd: string) => {
+      if (cmd === 'plugin:dialog|open') return '/Users/dj/Locked'
+      if (cmd === 'list_audio_files') throw new Error('cannot read folder: denied')
+      return undefined
+    })
+    vi.stubGlobal('__TAURI__', { core: { invoke } })
+    renderExplorer()
+    fireEvent.click(screen.getByRole('tab', { name: 'Folder' }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }))
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent('cannot read folder: denied')
   })
 })
 

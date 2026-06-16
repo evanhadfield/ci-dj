@@ -20,6 +20,13 @@ import {
 import { createLoudnessTracker, trimDbFor } from '../audio/master'
 import { STYLE_SAMPLE_SECONDS } from '../audio/styleSample'
 import { useAudioEngine } from '../audio/engineContext'
+import { getApiBaseUrl } from '../audio/nativeEngine'
+import {
+  sendNativeDeckCommand,
+  subscribeSidecarStatus,
+  type DeckCommand,
+} from './nativeDeck'
+import { subscribeDeckPcm } from './nativeDeckPcm'
 import {
   beatLoopRegion,
   clampRate,
@@ -29,7 +36,7 @@ import {
   type TrackLoop,
 } from '../audio/track'
 import { loadDeckSettings, updateDeckSettings } from '../persistence'
-import { SAMPLE_RATE, type DeckChannel, type DeckId } from '../audio/engine'
+import { SAMPLE_RATE, type DeckChannel, type DeckId } from '../audio/types'
 import {
   deckReducer,
   initialDeckState,
@@ -38,7 +45,6 @@ import {
   type ServerEvent,
 } from './deckState'
 
-const RECONNECT_DELAY_MS = 2_000
 /** Worklet stats older than this are stale: the live clocks and the
  * zoom view blank together, never a lie (ADR-0014). */
 const STATS_FRESH_MS = 2_500
@@ -248,8 +254,10 @@ export type DeckControls = {
   getChannelLevel: () => number
 }
 
-/** Owns one deck's WebSocket and its channel on the shared audio engine
- * (worklet ring buffer → deck gain → crossfade bus, see audio/engine.ts). */
+/** Owns one deck's native sidecar transport (control over IPC `deck_*`
+ * commands, status over `sidecar://status`) and its channel on the shared
+ * audio engine — the ring buffer → deck gain → crossfade bus now lives in
+ * the native Rust engine (`src-tauri/engine/src/graph.rs`). */
 export function useDeck(deckId: DeckId): DeckControls {
   const engine = useAudioEngine()
   const [state, dispatch] = useReducer(deckReducer, initialDeckState)
@@ -314,6 +322,14 @@ export function useDeck(deckId: DeckId): DeckControls {
   const anchorCandidateRef = useRef<{ anchorFrame: number } | null>(null)
   const anchorMissesRef = useRef(0)
   const liveBeatRef = useRef<{ anchorFrame: number; bpm: number } | null>(null)
+  // The played-frame origin for the live beat clock. On the Web path the worklet's
+  // playedFrames reset WITH the stream, sharing the pushed-frame origin with the
+  // tracker's anchorFrame (origin 0). The native engine reports a GLOBAL,
+  // never-reset render count, so the beat-clock math (anchorFrame − playedFrames)
+  // would mix two domains and lie (ADR-0014). We capture the native render count
+  // at each stream reset and subtract it, making playedFrames per-stream again;
+  // 0 on the Web path leaves it untouched.
+  const playedFramesOriginRef = useRef(0)
   // Tracker + gate per deck (M14), and the loudness tracker behind
   // auto-gain (M17) — all reset on stream discontinuities so an
   // estimate never spans two unrelated streams (the reset rule the
@@ -338,7 +354,10 @@ export function useDeck(deckId: DeckId): DeckControls {
     anchorMissesRef.current = 0
     liveBeatRef.current = null
     bandScroller.reset()
-  }, [beat, loudness, bandScroller])
+    // Re-anchor the played-frame origin to "now" so the freshly-reset tracker
+    // (anchorFrame 0) and the engine's global render count share a zero.
+    playedFramesOriginRef.current = (engine.getContextTime() ?? 0) * SAMPLE_RATE
+  }, [beat, loudness, bandScroller, engine])
   const [trim, setTrimState] = useState<TrimState>(
     () => loadDeckSettings(deckId).trim ?? { mode: 'auto', db: 0 },
   )
@@ -360,7 +379,6 @@ export function useDeck(deckId: DeckId): DeckControls {
     primedRef.current = next
   }, [])
 
-  const socketRef = useRef<WebSocket | null>(null)
   const channelRef = useRef<DeckChannel | null>(null)
   // Memoised in-flight channel build so rapid play() clicks share one
   // channel instead of stacking worklets on the bus.
@@ -396,61 +414,51 @@ export function useDeck(deckId: DeckId): DeckControls {
   }, [engine, deckId])
 
   useEffect(() => {
-    let disposed = false
-    let reconnectTimer: ReturnType<typeof setTimeout> | undefined
-
-    function connect() {
-      if (disposed) return
-      dispatch({ type: 'socket_connecting' })
-      const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
-      const socket = new WebSocket(`${scheme}://${location.host}/ws/deck/${deckId}`)
-      socket.binaryType = 'arraybuffer'
-      socketRef.current = socket
-
-      socket.onopen = () => dispatch({ type: 'socket_open' })
-      socket.onmessage = (event) => {
-        if (event.data instanceof ArrayBuffer) {
-          // A parked deck (playback mode) drops stragglers: a chunk the
-          // worker flushed late must not pollute the track's clock.
-          if (modeRef.current === 'playback') return
-          const samples = new Float32Array(event.data)
-          // Beat and loudness tracking read first — postPcm transfers
-          // the buffer away. (The feed runs ahead of the speakers by
-          // the buffer lead; neither measurement cares, ADR-0010.)
-          beat.tracker.push(samples)
-          loudness.push(samples)
-          bandScroller.push(samples)
-          channelRef.current?.postPcm(samples)
-        } else {
-          let parsed: ServerEvent
-          try {
-            parsed = JSON.parse(event.data) as ServerEvent
-          } catch {
-            console.warn(`deck ${deckId}: dropping malformed frame`, event.data)
-            return
-          }
-          if (parsed.event === 'model_loading' || parsed.event === 'worker_died') {
-            // The stream this buffer came from is gone with the old worker;
-            // a crashed deck goes silent rather than draining its tail under
-            // the crash banner. The beat tracker forgets it too.
-            channelRef.current?.reset()
-            resetStreamMeasurements()
-          }
-          dispatch({ type: 'server_event', event: parsed })
-        }
+    // The sidecar feeds the engine directly and reports status as `sidecar://status`
+    // events, teeing the model PCM back over a Tauri Channel so the TS
+    // beat/loudness/band analysis (ADR-0017: stays in TypeScript) gets the same input.
+    // The engine + sidecar IPC is available immediately — there is no socket
+    // handshake to wait for, so the deck is "open" (operable) at once. The
+    // sidecar's `ready`/`model_loading` status events then fill in the model +
+    // switch state.
+    dispatch({ type: 'socket_open' })
+    const unsubscribeStatus = subscribeSidecarStatus(deckId, (status) => {
+      if (status.event === 'model_loading' || status.event === 'worker_died') {
+        channelRef.current?.reset()
+        resetStreamMeasurements()
       }
-      socket.onclose = () => {
-        if (disposed) return
-        dispatch({ type: 'socket_closed' })
-        reconnectTimer = setTimeout(connect, RECONNECT_DELAY_MS)
-      }
-    }
-
-    connect()
+      dispatch({ type: 'server_event', event: status as ServerEvent })
+    })
+    const unsubscribePcm = subscribeDeckPcm(deckId, (samples) => {
+      // A parked deck (playback mode) drops stragglers so a late chunk cannot
+      // pollute the track's clock.
+      if (modeRef.current === 'playback') return
+      beat.tracker.push(samples)
+      loudness.push(samples)
+      bandScroller.push(samples)
+    })
+    // The model list + RAM info come from the generation server so the model
+    // picker populates and the RAM warning works.
+    let cancelled = false
+    void getApiBaseUrl()
+      .then((base) => fetch(`${base}/api/models`))
+      .then((response) => (response.ok ? response.json() : null))
+      .then((info) => {
+        if (cancelled || !info) return
+        dispatch({
+          type: 'deck_info',
+          models: info.models,
+          ramInfo: {
+            totalGb: info.total_ram_gb,
+            estimateGbByModel: info.model_ram_estimate_gb,
+          },
+        })
+      })
+      .catch(() => {})
     return () => {
-      disposed = true
-      clearTimeout(reconnectTimer)
-      socketRef.current?.close()
+      cancelled = true
+      unsubscribeStatus()
+      unsubscribePcm()
       channelRef.current?.dispose()
       channelRef.current = null
       channelPromiseRef.current = null
@@ -522,12 +530,13 @@ export function useDeck(deckId: DeckId): DeckControls {
     return () => clearInterval(timer)
   }, [beat, loudness, applyTrim])
 
-  const send = useCallback((command: object) => {
-    const socket = socketRef.current
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(command))
-    }
-  }, [])
+  const send = useCallback(
+    (command: DeckCommand) => {
+      // Forward control to the sidecar over IPC (deck_* commands).
+      sendNativeDeckCommand(deckId, command)
+    },
+    [deckId],
+  )
 
   const play = useCallback(async () => {
     // A playback deck's PLAY drives the track, not the worker.
@@ -951,9 +960,12 @@ export function useDeck(deckId: DeckId): DeckControls {
     const contextNow = engine.getContextTime()
     if (contextNow === null) return null
     // The played index in the pushed-frame domain — the scroller's
-    // and the beat anchor's clock (M20).
+    // and the beat anchor's clock (M20). On native, subtract the per-stream
+    // origin so this shares the tracker's reset-to-0 frame domain.
     const playedFrames =
-      stats.playedFrames + (contextNow - stats.contextTime) * SAMPLE_RATE
+      stats.playedFrames -
+      playedFramesOriginRef.current +
+      (contextNow - stats.contextTime) * SAMPLE_RATE
     const clock = liveBeatRef.current
     return {
       bands: bandScroller.source(),
@@ -980,8 +992,13 @@ export function useDeck(deckId: DeckId): DeckControls {
     if (performance.now() - stats.receivedAt > STATS_FRESH_MS) return null
     return {
       periodSeconds: 60 / clock.bpm,
+      // Subtract the native per-stream origin so anchorFrame (pushed, resets) and
+      // playedFrames (native: global render count) share a frame domain; their
+      // difference is the buffer lead, as on the Web path (origin 0).
       beatAtContext:
-        stats.contextTime + (clock.anchorFrame - stats.playedFrames) / SAMPLE_RATE,
+        stats.contextTime +
+        (clock.anchorFrame - (stats.playedFrames - playedFramesOriginRef.current)) /
+          SAMPLE_RATE,
     }
   }, [])
 
@@ -1017,8 +1034,10 @@ export function useDeck(deckId: DeckId): DeckControls {
   )
 
   const restartWorker = useCallback(() => {
-    send({ type: 'restart' })
-  }, [send])
+    // Carry the current model so the native path can respawn the same model (the
+    // web controller ignores it and restarts with the model it already tracks).
+    send({ type: 'restart', model: state.model ?? undefined })
+  }, [send, state.model])
 
   const setVolume = useCallback(
     (next: number) => {
@@ -1202,10 +1221,11 @@ export function useDeck(deckId: DeckId): DeckControls {
         try {
           // The channel is created on demand: pads can fill before the
           // deck has ever played (prepping weapons before the set).
+          const apiBase = await getApiBaseUrl()
           const [channel, response] = await Promise.all([
             ensureChannel(),
             fetch(
-              engine === 'magenta' ? '/api/render' : '/api/generate',
+              `${apiBase}${engine === 'magenta' ? '/api/render' : '/api/generate'}`,
               {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },

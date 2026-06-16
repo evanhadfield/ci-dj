@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from 'react'
 
-import { createAudioEngine, type AudioEngine } from './engine'
 import { AudioEngineContext } from './engineContext'
+import { createNativeEngine } from './nativeEngine'
+import type { AudioEngine } from './types'
 
 export function AudioEngineProvider({
   engine,
@@ -10,7 +11,9 @@ export function AudioEngineProvider({
   engine?: AudioEngine
   children: ReactNode
 }) {
-  const [defaultEngine] = useState(() => engine ?? createAudioEngine())
+  // The Rust engine drives all audio over IPC (ADR-0017/0018); the app only runs
+  // under Tauri. An explicitly injected engine always wins (tests inject a fake).
+  const [defaultEngine] = useState(() => engine ?? createNativeEngine())
   return (
     <AudioEngineContext.Provider value={engine ?? defaultEngine}>
       {children}

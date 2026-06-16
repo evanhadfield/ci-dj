@@ -55,33 +55,52 @@ setup-sa3:
     done
     touch "$stamp"
 
-# Build the frontend (the backend serves frontend/dist).
+# Build the frontend into frontend/dist (the Tauri webview loads it via
+# tauri.conf's frontendDist; tauri-dev / tauri-build depend on this).
 build:
     cd frontend && npm run build
 
-# Run the app: backend on http://127.0.0.1:8000 serving the built frontend.
-run: build
-    cd backend && uv run slipmate
+# Native shell: run the full native app in dev — the Rust audio engine (cpal) +
+# the per-deck Python inference sidecars + the sa3 generation server. The `build`
+# dependency rebuilds frontend/dist first (the webview loads it via frontendDist);
+# this must happen here, not in tauri.conf's beforeDevCommand, because Tauri runs
+# that hook from the repo root and a fresh dist is required or the decks hang in
+# 'Connecting'. Needs cargo-tauri (`cargo install tauri-cli@^2`) and the backend
+# deps + model weights (`just setup`). The default `uv run` sidecar/generation
+# commands use the backend project dir; override with SLIPMATE_SIDECAR_CMD /
+# SLIPMATE_GENERATION_CMD (e.g. the packaged binaries).
+tauri-dev: build
+    cd src-tauri && SLIPMATE_SIDECARS=1 cargo tauri dev
 
-# Backend only, for frontend development (pair with `just dev-frontend`).
-dev-backend:
-    cd backend && uv run slipmate
+# Freeze the Python inference sidecar into a ONEDIR binary for bundling
+# (src-tauri/sidecar-dist/). The production form of Spike B; see
+# docs/native-packaging.md. Needs `just setup` (backend .venv + pyinstaller).
+freeze-sidecar:
+    ./scripts/freeze-sidecar.sh
 
-# Vite dev server with /ws proxied to the backend (run `just dev-backend` too).
-dev-frontend:
-    cd frontend && npm run dev
+# Native shell (Phase 2): build + bundle the Tauri app (.app/.dmg) into
+# src-tauri/target/release/bundle/. The `build` dependency rebuilds frontend/dist
+# first (embedded via frontendDist). Codesign + notarize when the APPLE_* env vars
+# are set (docs/native-packaging.md §3). Needs cargo-tauri
+# (`cargo install tauri-cli@^2`); bundle the sidecar first with `freeze-sidecar`.
+tauri-build: build
+    cd src-tauri && cargo tauri build
 
-# All tests: backend pytest + frontend vitest.
+# All tests: backend pytest + frontend vitest + the Rust engine/shell.
 test:
     cd backend && uv run pytest
     cd frontend && npm run test
+    cd src-tauri && cargo test --workspace
 
-# Lint + format check + type-check, both halves.
+# Lint + format check + type-check, all three stacks. (No `cargo fmt --check`:
+# the Rust follows a hand-style like the frontend, not rustfmt — clippy is the
+# gate.)
 lint:
     cd backend && uv run ruff format --check .
     cd backend && uv run ruff check .
     cd frontend && npm run lint
     cd frontend && npx tsc -b
+    cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings
 
 # Apply formatting.
 format:
@@ -89,26 +108,3 @@ format:
 
 # Everything a PR must pass: lint + tests.
 check: lint test
-
-# Stream e2e against a running server (`just run` in another terminal).
-verify-stream duration="60":
-    cd backend && uv run python scripts/verify_m1.py {{duration}}
-
-# Worklet module graph loads in real Chromium (self-contained; jsdom
-# executes none of the worklet code).
-verify-worklets: build
-    cd frontend && node scripts/verify_worklet_modules.mjs
-
-# UI e2e in headless Chromium against a running server.
-verify-ui:
-    cd backend && uv run python scripts/repro_reconnect_echo.py
-    cd frontend && node scripts/verify_m2.mjs
-    cd frontend && node scripts/verify_m3.mjs
-    cd frontend && node scripts/verify_m4.mjs
-    cd frontend && node scripts/verify_m5.mjs
-    cd frontend && node scripts/verify_m6.mjs
-    cd frontend && node scripts/verify_m17.mjs
-    cd frontend && node scripts/verify_m18.mjs
-    cd frontend && node scripts/verify_m19.mjs
-    cd frontend && node scripts/verify_m20.mjs
-    cd frontend && node scripts/verify_m21.mjs

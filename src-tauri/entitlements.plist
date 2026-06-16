@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Hardened-runtime entitlements (Developer ID + notarization, Phase 2 part 6).
+       SlipMate is a Developer-ID app (NOT App-Store-sandboxed), so this file only
+       RELAXES hardened-runtime protections the runtime needs; it grants no sandbox
+       permissions. -->
+
+  <!-- WKWebView's JavaScriptCore JIT, and the MLX/LLVM JIT in the inference
+       sidecar (Metal kernels are JIT-compiled at runtime, Spike B). -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+
+  <!-- The PyInstaller ONEDIR sidecar ships its own adhoc-signed dylibs
+       (libmlx, libjaccl, the metallib loader, …). Library validation would
+       refuse to load them next to a Developer-ID-signed parent, so disable it. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

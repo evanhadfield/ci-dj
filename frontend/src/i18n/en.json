@@ -62,7 +62,6 @@
     },
     "folder": {
       "choose": "Choose folder",
-      "unsupported": "Folder browsing needs Chromium's File System Access API",
       "empty": "No audio files in {{name}}"
     }
   },
@@ -93,11 +92,11 @@
     "limiterDb": "{{db}} dB",
     "phones": "Phones",
     "cueMix": "Cue mix",
-    "phonesOutput": "Phones out",
-    "phonesOff": "Off",
-    "phonesScan": "Find devices",
-    "phonesJack": "{{name}} — phones jack",
-    "phonesError": "Phones output failed: {{message}}",
+    "output": "Output device",
+    "outputDefault": "System default",
+    "outputCue": "{{name}} — cue ready",
+    "outputNoCue": "{{name}} — no cue (needs 4ch)",
+    "outputError": "Couldn't switch output: {{message}}",
     "record": "Record",
     "stopRecording": "Stop recording",
     "recordingFor": "REC {{time}}",
@@ -175,7 +174,6 @@
     "status": {
       "connecting": "Connecting…",
       "connected": "Connected",
-      "disconnected": "Disconnected — retrying",
       "loadingModel": "Loading model…",
       "primed": "Primed — off air",
       "frozen": "Frozen — looping",

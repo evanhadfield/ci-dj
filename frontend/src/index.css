@@ -20,12 +20,27 @@ body {
 }
 
 .app {
+  position: relative;
   height: 100dvh;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-3);
+  /* Extra top inset clears the frameless window's overlaid macOS title bar so
+     the status bar sits below the traffic-light buttons (titleBarStyle Overlay);
+     the `.app__titlebar` strip fills that inset as the draggable title bar. */
+  padding: var(--titlebar-inset) var(--space-3) var(--space-3);
   overflow: hidden;
+}
+
+/* The draggable title-bar strip: a transparent surface over the top inset, behind
+   the native traffic lights (the webview covers the native title bar, so dragging
+   needs this explicit region). Out of flow so it doesn't shift the layout. */
+.app__titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--titlebar-inset);
 }
 
 .app__statusbar {

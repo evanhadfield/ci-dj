@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { DeckId } from '../audio/engine'
+import type { DeckId } from '../audio/types'
+import { getApiBaseUrl, invoke } from '../audio/nativeEngine'
 import { useControlBus } from '../control/busContext'
 import { CrateBrowser } from '../crates/CrateBrowser'
 import type { StylePreset } from '../presets'
@@ -24,16 +25,10 @@ type GeneratedTrack =
       wav: ArrayBuffer
     }
 
-type FolderFile = { name: string; handle: FileSystemFileHandle }
+// A browsable file: just the name. `read_audio_file` re-derives the path from the
+// chosen folder + name (the webview never supplies a path to read).
+type FolderFile = { name: string }
 
-// Chromium's File System Access API; the DOM lib types stop short of
-// the directory iterator, so the shapes are pinned down here.
-type DirectoryHandle = FileSystemDirectoryHandle & {
-  values: () => AsyncIterable<FileSystemHandle>
-}
-type DirectoryPicker = { showDirectoryPicker?: () => Promise<DirectoryHandle> }
-
-const AUDIO_FILE = /\.(wav|mp3|flac|m4a|ogg|aif|aiff)$/i
 // Per-engine length menus, mirroring the backend caps: the small DiTs
 // stop at sa3.MAX_SECONDS (32 s), the medium track DiT at
 // sa3.TRACK_MAX_SECONDS (6:20), Magenta renders at
@@ -101,6 +96,8 @@ export function MediaExplorer({
   const [seconds, setSeconds] = useState(120)
   const [generateError, setGenerateError] = useState<string | null>(null)
   const [folderName, setFolderName] = useState<string | null>(null)
+  // The native picker's absolute folder path; `read_audio_file` scopes reads to it.
+  const [folderPath, setFolderPath] = useState<string | null>(null)
   const [files, setFiles] = useState<FolderFile[]>([])
   const [folderError, setFolderError] = useState<string | null>(null)
   // The rotary highlight for the generate/folder tabs; the crates tab
@@ -119,16 +116,28 @@ export function MediaExplorer({
     ready.length === 0 ? null : ready[Math.min(highlight, ready.length - 1)].id
 
   async function loadTrackItem(deck: DeckId, wav: ArrayBuffer, title: string) {
-    // decodeAudioData detaches the buffer it is given — hand over a
-    // copy so the item can be loaded again (or onto the other deck).
-    const loaded = await onLoadTrack(deck, wav.slice(0), title)
-    if (!loaded) setGenerateError(t('media.undecodable', { title }))
+    setGenerateError(null)
+    try {
+      // decodeAudioData detaches the buffer it is given — hand over a
+      // copy so the item can be loaded again (or onto the other deck).
+      const loaded = await onLoadTrack(deck, wav.slice(0), title)
+      if (!loaded) setGenerateError(t('media.undecodable', { title }))
+    } catch (error) {
+      // The click is fire-and-forget (`void loadTrackItem`), so a rejected
+      // decode/IPC load would otherwise vanish and look like nothing happened.
+      // Surface it, like loadFolderFile does.
+      setGenerateError(error instanceof Error ? error.message : String(error))
+    }
   }
 
   async function loadFolderFile(deck: DeckId, file: FolderFile) {
     setFolderError(null)
     try {
-      const wav = await (await file.handle.getFile()).arrayBuffer()
+      // The Rust command reads the bytes, scoped to the chosen folder.
+      const wav = await invoke<ArrayBuffer>('read_audio_file', {
+        dir: folderPath,
+        name: file.name,
+      })
       const loaded = await onLoadTrack(deck, wav, file.name)
       if (!loaded) setFolderError(t('media.undecodable', { title: file.name }))
     } catch (error) {
@@ -180,8 +189,9 @@ export function MediaExplorer({
     ])
     void (async () => {
       try {
+        const apiBase = await getApiBaseUrl()
         const response = await fetch(
-          requestEngine === 'magenta' ? '/api/render' : '/api/generate',
+          `${apiBase}${requestEngine === 'magenta' ? '/api/render' : '/api/generate'}`,
           {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -215,27 +225,20 @@ export function MediaExplorer({
   }
 
   async function chooseFolder() {
-    const picker = (window as Window & DirectoryPicker).showDirectoryPicker
-    if (!picker) {
-      setFolderError(t('media.folder.unsupported'))
-      return
-    }
     setFolderError(null)
+    // The OS folder picker (dialog plugin) + a Rust dir listing — WKWebView has no
+    // File System Access API.
     try {
-      const directory = await picker()
-      const found: FolderFile[] = []
-      for await (const handle of directory.values()) {
-        if (handle.kind === 'file' && AUDIO_FILE.test(handle.name)) {
-          found.push({ name: handle.name, handle: handle as FileSystemFileHandle })
-        }
-      }
-      found.sort((left, right) => left.name.localeCompare(right.name))
-      setFolderName(directory.name)
-      setFiles(found)
+      const dir = await invoke<string | null>('plugin:dialog|open', {
+        options: { directory: true, multiple: false },
+      })
+      if (!dir) return // the user dismissed the picker
+      const names = await invoke<string[]>('list_audio_files', { dir })
+      setFolderPath(dir)
+      setFolderName(dir.replace(/\/+$/, '').split('/').pop() || dir)
+      setFiles(names.map((name) => ({ name })))
       setHighlight(0)
     } catch (error) {
-      // A dismissed picker is not an error worth shouting about.
-      if (error instanceof DOMException && error.name === 'AbortError') return
       setFolderError(error instanceof Error ? error.message : String(error))
     }
   }
