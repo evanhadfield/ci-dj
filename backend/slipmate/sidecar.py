@@ -34,6 +34,9 @@ from .worker import run_deck_worker
 FRAME_PCM = 1
 FRAME_STATUS = 2
 FRAME_CONTROL = 3
+# Engine → sidecar: a style-sample embed (M15). Binary, not JSON, because it
+# carries raw PCM: [u32 LE id length][id utf-8][interleaved f32 LE PCM].
+FRAME_EMBED = 4
 
 # u8 frame type, u32 little-endian payload length.
 _HEADER = struct.Struct("<BI")
@@ -96,8 +99,18 @@ class SocketCmdQueue:
                 self._queue.put({"type": "shutdown"})
                 return
             frame_type, payload = frame
+            if frame_type == FRAME_EMBED:
+                # Style-sample embed (M15): [u32 LE id length][id][PCM] → an
+                # embed_sample command the worker handles like the WS path's.
+                if len(payload) < 4:
+                    continue
+                id_len = int.from_bytes(payload[:4], "little")
+                sample_id = payload[4 : 4 + id_len].decode("utf-8", "replace")
+                pcm = bytes(payload[4 + id_len :])
+                self._queue.put({"type": "embed_sample", "id": sample_id, "pcm": pcm})
+                continue
             if frame_type != FRAME_CONTROL:
-                continue  # ignore non-control frames (forward-compatible)
+                continue  # ignore other frames (forward-compatible)
             try:
                 command = json.loads(payload)
             except json.JSONDecodeError:

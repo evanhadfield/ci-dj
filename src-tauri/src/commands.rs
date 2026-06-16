@@ -523,6 +523,28 @@ pub fn deck_set_model(state: tauri::State<'_, Sidecars>, deck: usize, model: Str
     state.restart(deck, &model)
 }
 
+/// Embed a captured style sample (M15) into a deck's sidecar. The payload is
+/// `[u32 LE deck][u32 LE id length][id utf-8][interleaved f32 LE PCM]` — binary
+/// (the PCM is multi-MB), like `load_track`. The native shell routes the embed to
+/// the deck's sidecar over the control socket (the generation server has no deck
+/// workers).
+#[tauri::command]
+pub fn deck_embed_sample(state: tauri::State<'_, Sidecars>, payload: Vec<u8>) {
+    let (Some(deck), Some(id_len)) = (
+        read_u32_le(&payload, 0).map(|d| d as usize),
+        read_u32_le(&payload, 4).map(|l| l as usize),
+    ) else {
+        return;
+    };
+    let id_end = 8 + id_len;
+    let Some(id) = payload.get(8..id_end).and_then(|b| std::str::from_utf8(b).ok()) else {
+        return;
+    };
+    if valid_deck(deck) {
+        state.embed(deck, id, &payload[id_end..]);
+    }
+}
+
 #[tauri::command]
 pub fn deck_set_style(state: tauri::State<'_, Sidecars>, deck: usize, prompts: Vec<PromptEntryArg>) {
     if !valid_deck(deck) {

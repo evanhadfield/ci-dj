@@ -250,6 +250,7 @@ pub fn run() {
             commands::deck_set_prompt,
             commands::deck_set_style,
             commands::deck_set_model,
+            commands::deck_embed_sample,
             commands::subscribe_deck_pcm,
             commands::unsubscribe_deck_pcm,
         ])

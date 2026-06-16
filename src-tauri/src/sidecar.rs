@@ -91,6 +91,9 @@ pub const FRAME_PCM: u8 = 1;
 pub const FRAME_STATUS: u8 = 2;
 /// Engine → sidecar: UTF-8 JSON deck control (`play`/`stop`/`set_style`/…).
 pub const FRAME_CONTROL: u8 = 3;
+/// Engine → sidecar: a style-sample embed (M15). Binary, not JSON, because it
+/// carries raw PCM: `[u32 LE id length][id utf-8][interleaved f32 LE PCM]`.
+pub const FRAME_EMBED: u8 = 4;
 
 /// Cap on a single frame's payload — a guard against a desynced/hostile stream
 /// allocating unbounded memory. A 1 s PCM chunk is 384 000 bytes; 16 MiB is far
@@ -419,6 +422,23 @@ impl Sidecar {
             }
         }
     }
+
+    /// Send a style-sample embed (M15) to the sidecar over the control socket: the
+    /// captured PCM is framed as `[u32 LE id length][id][PCM]`. A no-op (logged) if
+    /// the sidecar is not connected.
+    pub fn send_embed(&self, id: &str, pcm: &[u8]) {
+        let mut payload = Vec::with_capacity(4 + id.len() + pcm.len());
+        payload.extend_from_slice(&(id.len() as u32).to_le_bytes());
+        payload.extend_from_slice(id.as_bytes());
+        payload.extend_from_slice(pcm);
+        let mut guard = self.control.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(stream) = guard.as_mut() {
+            if let Err(e) = write_frame(stream, FRAME_EMBED, &payload) {
+                eprintln!("slipmate-sidecar-{}: embed write failed: {e}", self.deck_id);
+                *guard = None;
+            }
+        }
+    }
 }
 
 /// All per-deck sidecars, held in Tauri managed state. The deck-control commands
@@ -443,6 +463,16 @@ impl Sidecars {
         if let Some(slot) = self.decks.get(deck) {
             if let Some(sidecar) = slot.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
                 sidecar.send_control(json);
+            }
+        }
+    }
+
+    /// Route a style-sample embed (M15) to a deck's sidecar (a no-op for a deck
+    /// without a live sidecar). `deck` is validated by the IPC layer.
+    pub fn embed(&self, deck: usize, id: &str, pcm: &[u8]) {
+        if let Some(slot) = self.decks.get(deck) {
+            if let Some(sidecar) = slot.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+                sidecar.send_embed(id, pcm);
             }
         }
     }

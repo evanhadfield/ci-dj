@@ -11,6 +11,7 @@ import time
 
 from slipmate.sidecar import (
     FRAME_CONTROL,
+    FRAME_EMBED,
     FRAME_PCM,
     FRAME_STATUS,
     SocketCmdQueue,
@@ -174,3 +175,20 @@ def test_sidecar_main_argument_parsing(monkeypatch):
     assert captured["addr"] == ("127.0.0.1", 5050)
     assert captured["deck"] == "b"
     assert captured["model"] == "mrt2_small"
+
+
+def test_cmd_queue_decodes_embed_frame_to_embed_sample():
+    # A FRAME_EMBED ([u32 id_len][id][pcm]) becomes an embed_sample command the
+    # worker handles (M15 style sampling routed to the sidecar in native).
+    sample_id = b"sample:a:1"
+    pcm = b"\x00\x01\x02\x03\x04\x05\x06\x07"
+    payload = len(sample_id).to_bytes(4, "little") + sample_id + pcm
+    rec = RecordingSock()
+    write_frame(rec, FRAME_EMBED, payload)
+
+    cmd = SocketCmdQueue(io.BytesIO(bytes(rec.buffer)))
+    assert cmd.get(timeout=1.0) == {
+        "type": "embed_sample",
+        "id": "sample:a:1",
+        "pcm": pcm,
+    }

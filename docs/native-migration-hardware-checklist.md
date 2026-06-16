@@ -119,9 +119,11 @@ status arrives as `sidecar://status` events (`useDeck` selects this with
     - [ ] Quitting the app kills the generation server (no orphaned uvicorn /
           loopback-port + model leak) — `RunEvent::Exit` handles this since macOS
           `process::exit` skips managed-state `Drop`. Same for the sidecars.
-    - [ ] Style sampling (`/api/deck/{id}/style-sample`) — NOT yet wired in native
-          (the gen server has no deck workers); follow-up: route the embed to the
-          sidecar (`embed_sample` over `FRAME_CONTROL`, which `worker.py` handles).
+    - [x] Style sampling routed to the sidecar (the gen server has no deck
+          workers) — done: a binary `FRAME_EMBED` carries the captured PCM to the
+          target deck's sidecar (`deck_embed_sample`), which injects an
+          `embed_sample` command `worker.py` handles. Verify on the live stack:
+          sample deck A's tail, drop it on a deck B pad, hear B adopt the style.
     - [ ] Dev: `just tauri-dev` launches the gen server + sidecars (the
           default `uv run` uses the backend dir as CWD; override with
           `SLIPMATE_GENERATION_CMD` / `SLIPMATE_SIDECAR_CMD`).
