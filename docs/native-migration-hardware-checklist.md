@@ -60,3 +60,18 @@ with the browser path that still depends on them.)
       simply absent (no crash, no glitch).
 - [ ] Booth output (a third pair mirroring the master) — follow-up, not yet
       wired.
+
+## Part 6 — Packaging (`docs/native-packaging.md`)
+
+- [ ] `just freeze-sidecar` produces `src-tauri/sidecar-dist/slipmate_infer/`
+      (~931 MB) and the frozen binary runs: `slipmate_infer --deck a --model
+      mrt2_small --port <n>` connects to a listener and streams a chunk.
+- [ ] The frozen sidecar is added as a Tauri `resources` entry and the packaged
+      app spawns it (SLIPMATE_SIDECAR_CMD / resolved resource path).
+- [ ] `just tauri-build` with the `APPLE_*` env set produces a signed, notarized,
+      stapled `.app` + `.dmg` (entitlements applied; the sidecar tree signed).
+- [ ] First launch on a clean Mac: Gatekeeper passes (no "unidentified
+      developer"); the one-time scan completes; subsequent launches are fast.
+- [ ] First run with NO weights: the model-download screen appears, downloads to
+      `$MAGENTA_HOME/magenta-rt-v2`, then reveals the decks (preserves
+      `just setup`).

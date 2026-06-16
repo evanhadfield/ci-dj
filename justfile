@@ -73,8 +73,16 @@ tauri-dev:
 tauri-dev-native:
     cd src-tauri && SLIPMATE_SIDECARS=1 cargo tauri dev
 
+# Freeze the Python inference sidecar into a ONEDIR binary for bundling
+# (src-tauri/sidecar-dist/). The production form of Spike B; see
+# docs/native-packaging.md. Needs `just setup` (backend .venv + pyinstaller).
+freeze-sidecar:
+    ./scripts/freeze-sidecar.sh
+
 # Native shell (Phase 2): build + bundle the Tauri app (.app/.dmg) into
-# src-tauri/target/release/bundle/. Needs cargo-tauri (`cargo install tauri-cli@^2`).
+# src-tauri/target/release/bundle/. Codesign + notarize when the APPLE_* env vars
+# are set (docs/native-packaging.md §3). Needs cargo-tauri
+# (`cargo install tauri-cli@^2`); bundle the sidecar first with `freeze-sidecar`.
 tauri-build:
     cd src-tauri && cargo tauri build
 

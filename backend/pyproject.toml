@@ -19,6 +19,9 @@ dev = [
     "pytest>=8",
     "ruff>=0.8",
     "websockets>=14",
+    # Freezes the inference sidecar for the native bundle (Phase 2 part 6;
+    # scripts/freeze-sidecar.sh). A build tool, not a runtime dep.
+    "pyinstaller>=6.21",
 ]
 
 [build-system]
