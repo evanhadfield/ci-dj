@@ -165,6 +165,14 @@ impl MasterLimiter {
     }
 }
 
+/// One frame's mix output: the master pair the speakers get, the headphone cue
+/// pair, and the master limiter's applied gain (for the gain-reduction meter).
+pub(crate) struct FrameOut {
+    pub(crate) master: (f32, f32),
+    pub(crate) cue: (f32, f32),
+    pub(crate) gain_reduction: f32,
+}
+
 /// The mix graph: per-channel EQ chains, per-deck volume, the crossfade gains,
 /// and the master limiter. Holds no ring state — `render()` feeds it frame
 /// samples and reads back the mixed, limited pair.
@@ -198,6 +206,13 @@ pub(crate) struct MixGraph {
     /// enables it, `clear_fx` disables it again — mirroring `setFx(null)` removing
     /// the effect in the Web Audio engine.
     fx_enabled: [bool; DECK_COUNT],
+    /// Per-deck headphone-cue (PFL) tap (default false). A cued deck's post-EQ/FX,
+    /// PRE-fader signal sums into the cue bus regardless of its fader / crossfade /
+    /// on-air state (the point of pre-fade listen). Non-RT `set_cue`.
+    cue: [bool; DECK_COUNT],
+    /// Cue/master blend for the headphone feed (0 = cue bus only, 1 = master),
+    /// default [`crate::INITIAL_CUE_MIX`]. Non-RT `set_cue_mix`.
+    cue_mix: f32,
     /// Equal-power crossfade gains, one per deck. `gains[0]` weights deck A,
     /// `gains[1]` weights deck B. Recomputed by `set_crossfade` (non-RT).
     gains: [f32; DECK_COUNT],
@@ -256,6 +271,8 @@ impl MixGraph {
             trims: [1.0; DECK_COUNT],
             on_air: [true; DECK_COUNT],
             fx_enabled: [false; DECK_COUNT],
+            cue: [false; DECK_COUNT],
+            cue_mix: crate::INITIAL_CUE_MIX,
             gains: [0.0; DECK_COUNT],
             limiter: MasterLimiter::new(SAMPLE_RATE as f32),
         };
@@ -300,6 +317,17 @@ impl MixGraph {
     /// pure dry passthrough — until the next `set_fx`. Non-RT.
     pub(crate) fn clear_fx(&mut self, deck: usize) {
         self.fx_enabled[deck] = false;
+    }
+
+    /// Set a deck's headphone-cue (PFL) tap. Non-RT.
+    pub(crate) fn set_cue(&mut self, deck: usize, on: bool) {
+        self.cue[deck] = on;
+    }
+
+    /// Set the cue/master headphone blend in `[0, 1]` (0 = cue only, 1 = master).
+    /// Non-RT.
+    pub(crate) fn set_cue_mix(&mut self, position: f32) {
+        self.cue_mix = position.clamp(0.0, 1.0);
     }
 
     /// Set a deck's EQ band knob value in `[0, 1]` and **rebuild that deck's two
@@ -349,13 +377,14 @@ impl MixGraph {
 
     /// Process one frame: per-deck chain-head trim, per-deck EQ both channels, the
     /// Color FX insert, per-deck volume, equal-power crossfade + on-air gate, the
-    /// master limiter, then the clip-guard ceiling clamp.
+    /// master limiter, then the clip-guard ceiling clamp. Also derives the
+    /// headphone cue feed.
     /// `decks[d] = (left, right)` pre-EQ. Fills `deck_levels[d]` with each deck's
     /// post-fader magnitude (for the channel meters — taken BEFORE the crossfade
     /// weight and the on-air gate, so a faded-out / off-air deck still meters its
-    /// live level). Returns the mixed, limited, clamped `(left, right)` and the
-    /// master limiter's gain reduction this frame as a linear factor in `(0, 1]`
-    /// (1.0 = no reduction), for telemetry.
+    /// live level). Returns the mixed/limited/clamped master `(left, right)`, the
+    /// headphone cue `(left, right)`, and the master limiter's gain reduction this
+    /// frame as a linear factor in `(0, 1]` (1.0 = no reduction), for telemetry.
     ///
     /// RT-safe: only `tick` on pre-built nodes (alloc-free) and arithmetic.
     #[inline]
@@ -363,12 +392,15 @@ impl MixGraph {
         &mut self,
         decks: [(f32, f32); DECK_COUNT],
         deck_levels: &mut [f32; DECK_COUNT],
-    ) -> (f32, f32, f32) {
+    ) -> FrameOut {
         let mut in1 = [0.0f32; 1];
         let mut out1 = [0.0f32; 1];
 
         let mut mixed_l = 0.0f32;
         let mut mixed_r = 0.0f32;
+        // Pre-fade-listen bus: cued decks' post-FX signal, independent of faders.
+        let mut cue_l = 0.0f32;
+        let mut cue_r = 0.0f32;
 
         for (d, (l, r)) in decks.into_iter().enumerate() {
             // Chain-head trim (M17): pre-EQ, so EQ kills stay the performer's move.
@@ -392,6 +424,13 @@ impl MixGraph {
             } else {
                 (l, r)
             };
+
+            // Pre-fade cue tap (PFL): a cued deck feeds the headphone bus from here
+            // — post-EQ/FX but BEFORE the fader, crossfade, and on-air gate.
+            if self.cue[d] {
+                cue_l += l;
+                cue_r += r;
+            }
 
             // Channel fader. The post-fader magnitude drives the channel meter —
             // captured here, BEFORE the crossfade weight and the on-air gate.
@@ -426,7 +465,18 @@ impl MixGraph {
         if or.abs() < 1.0e-30 {
             or = 0.0;
         }
-        (ol, or, applied_gain)
+
+        // Headphone feed: blend the PFL cue bus with the master per `cue_mix`
+        // (0 = cue only, 1 = master), then clip-guard so the phones never clip.
+        let mix = self.cue_mix;
+        let cue_out_l = ((1.0 - mix) * cue_l + mix * ol).clamp(-MASTER_CEILING, MASTER_CEILING);
+        let cue_out_r = ((1.0 - mix) * cue_r + mix * or).clamp(-MASTER_CEILING, MASTER_CEILING);
+
+        FrameOut {
+            master: (ol, or),
+            cue: (cue_out_l, cue_out_r),
+            gain_reduction: applied_gain,
+        }
     }
 
     /// Reset all EQ filter state and the limiter envelope (e.g. on a hard engine

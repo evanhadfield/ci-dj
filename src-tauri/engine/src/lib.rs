@@ -78,6 +78,10 @@ pub const DECK_COUNT: usize = 2;
 /// chain's hard clip guard (the parity constant from the spike).
 pub const MASTER_CEILING: f32 = 0.9296875;
 
+/// Default cue/master headphone blend (0 = cue only, 1 = master). Mirrors
+/// `INITIAL_CUE_MIX` in the Web Audio engine.
+pub const INITIAL_CUE_MIX: f32 = 0.5;
+
 /// Per-deck ring capacity in frames (30 s of stereo audio).
 pub const RING_SECS: usize = 30;
 pub const RING_FRAMES: usize = RING_SECS * SAMPLE_RATE as usize;
@@ -327,6 +331,23 @@ impl Engine {
     pub fn set_on_air(&mut self, deck_index: usize, on: bool) {
         assert!(deck_index < DECK_COUNT, "deck index {deck_index} out of range");
         self.graph.set_on_air(deck_index, on);
+    }
+
+    /// Set a deck's headphone-cue (PFL) tap (Slice 5). A cued deck feeds the cue
+    /// bus pre-fader, so it is audible in the phones regardless of its fader /
+    /// crossfade / on-air state. Non-RT.
+    ///
+    /// # Panics
+    /// Panics if `deck_index >= DECK_COUNT` (a caller programming error).
+    pub fn set_cue(&mut self, deck_index: usize, on: bool) {
+        assert!(deck_index < DECK_COUNT, "deck index {deck_index} out of range");
+        self.graph.set_cue(deck_index, on);
+    }
+
+    /// Set the cue/master headphone blend in `[0, 1]` (0 = cue bus only, 1 =
+    /// master). Non-RT.
+    pub fn set_cue_mix(&mut self, position: f32) {
+        self.graph.set_cue_mix(position);
     }
 
     // --- Slice 4a: the playback deck (M19/M20/M21/M23, ADR-0013…0016) ---
@@ -651,7 +672,7 @@ impl Engine {
 
     /// **The RT path.** Drain `frames` from every deck's ring, mix them through
     /// the bare graph (per-deck EQ, equal-power crossfade, master clamp), and
-    /// write `frames` interleaved stereo samples into `out`.
+    /// write `frames` interleaved stereo samples into `out` (the master feed).
     ///
     /// `out` must have room for `frames * CHANNELS` samples; any device channels
     /// beyond stereo are the device wrapper's concern (it deinterleaves to the
@@ -660,9 +681,31 @@ impl Engine {
     /// `assert_no_alloc`.
     #[inline]
     pub fn render(&mut self, out: &mut [f32], frames: usize) {
+        self.render_inner(out, None, frames);
+    }
+
+    /// Like [`Engine::render`] but ALSO writes the headphone cue feed (Slice 5):
+    /// `master_out` gets the speaker mix, `cue_out` the PFL/cue blend (both
+    /// interleaved stereo, `frames * CHANNELS` samples). The cue feed is the
+    /// per-deck cued (PFL) signal blended with the master per the cue mix. Same
+    /// RT-safety contract as `render`.
+    #[inline]
+    pub fn render_with_cue(&mut self, master_out: &mut [f32], cue_out: &mut [f32], frames: usize) {
+        self.render_inner(master_out, Some(cue_out), frames);
+    }
+
+    /// The shared render core. Always fills `master_out`; fills `cue_out` too when
+    /// `Some`. One per-frame loop so the master and cue stay sample-aligned and the
+    /// per-deck drain happens exactly once.
+    #[inline]
+    fn render_inner(&mut self, master_out: &mut [f32], mut cue_out: Option<&mut [f32]>, frames: usize) {
         debug_assert!(
-            out.len() >= frames * CHANNELS as usize,
-            "render: output buffer too small"
+            master_out.len() >= frames * CHANNELS as usize,
+            "render: master buffer too small"
+        );
+        debug_assert!(
+            cue_out.as_ref().is_none_or(|c| c.len() >= frames * CHANNELS as usize),
+            "render: cue buffer too small"
         );
         self.telemetry.note_block();
 
@@ -698,11 +741,16 @@ impl Engine {
                 *pair = self.loops[d].mix_frame(live);
             }
 
-            let (ol, or, gain_reduction) = self.graph.mix_frame(pairs, &mut deck_levels);
+            let out = self.graph.mix_frame(pairs, &mut deck_levels);
+            let (ol, or) = out.master;
 
             let base = f * CHANNELS as usize;
-            out[base] = ol;
-            out[base + 1] = or;
+            master_out[base] = ol;
+            master_out[base + 1] = or;
+            if let Some(cue) = cue_out.as_deref_mut() {
+                cue[base] = out.cue.0;
+                cue[base + 1] = out.cue.1;
+            }
 
             let peak = ol.abs().max(or.abs());
             if peak > master_peak {
@@ -710,8 +758,8 @@ impl Engine {
             }
             // Fold the limiter's per-frame applied gain into the GR meter
             // (monotone-min over the block; the deepest reduction wins).
-            if gain_reduction < min_gain {
-                min_gain = gain_reduction;
+            if out.gain_reduction < min_gain {
+                min_gain = out.gain_reduction;
             }
             // Fold each deck's post-fader level into the block's peak (per-channel).
             for d in 0..DECK_COUNT {
@@ -1086,6 +1134,39 @@ mod tests {
         samples
     }
 
+    /// Prime + render deck A through `render_with_cue`; returns the steady-state
+    /// RMS of the master L and the cue L (the headphone feed).
+    fn deck_a_master_and_cue_rms(
+        engine: &mut Engine,
+        deck_a: &mut DeckHandle,
+        freq: f32,
+        amp: f32,
+    ) -> (f32, f32) {
+        let mut src = SineSource::new(freq, amp);
+        feed(deck_a, &mut src, PREBUFFER_FRAMES + 12 * BLOCK);
+
+        let mut master = vec![0.0f32; BLOCK * CHANNELS as usize];
+        let mut cue = vec![0.0f32; BLOCK * CHANNELS as usize];
+        for _ in 0..8 {
+            engine.render_with_cue(&mut master, &mut cue, BLOCK);
+        }
+        let (mut ms, mut cs, mut n) = (0.0f64, 0.0f64, 0u64);
+        for _ in 0..16 {
+            engine.render_with_cue(&mut master, &mut cue, BLOCK);
+            for f in 0..BLOCK {
+                let m = master[2 * f] as f64;
+                let c = cue[2 * f] as f64;
+                ms += m * m;
+                cs += c * c;
+                n += 1;
+            }
+        }
+        (
+            (ms / n as f64).sqrt() as f32,
+            (cs / n as f64).sqrt() as f32,
+        )
+    }
+
     /// (S2-1) The EQ curve: at each band's centre, kill (0) ≈ −40 dB, flat (0.5)
     /// ≈ 0 dB, boost (1) ≈ +6 dB relative to the flat passthrough. Low/high are
     /// true shelves (measured well inside the shelf band); the mid is a bell at
@@ -1355,6 +1436,47 @@ mod tests {
         assert!(
             max_diff(&dry, &cleared) < 1e-6,
             "clear_fx must restore the bit-identical dry path"
+        );
+    }
+
+    /// (P2-5a) Pre-fade listen: a cued deck is audible in the phones even when it
+    /// is crossfaded entirely out of the master. cue_mix=0 → phones are the cue
+    /// bus alone.
+    #[test]
+    fn cue_is_pre_fade_independent_of_the_crossfader() {
+        let mut engine = Engine::new();
+        let mut deck_a = engine.create_deck(0);
+        let _deck_b = engine.create_deck(1);
+        engine.set_crossfade(1.0); // master = full deck B; deck A weighted to 0
+        engine.set_cue(0, true);
+        engine.set_cue_mix(0.0); // phones = cue bus only
+
+        let (master, cue) = deck_a_master_and_cue_rms(&mut engine, &mut deck_a, 440.0, 0.2);
+        assert!(
+            master < 1e-3,
+            "deck A is crossfaded out of the master ({master})"
+        );
+        assert!(
+            cue > 0.05,
+            "a cued deck must still be audible in the phones ({cue})"
+        );
+    }
+
+    /// (P2-5b) cue_mix = 1 collapses the headphone feed to the master exactly (the
+    /// cue bus is muted), regardless of PFL state.
+    #[test]
+    fn cue_mix_full_master_equals_the_master_feed() {
+        let mut engine = Engine::new();
+        let mut deck_a = engine.create_deck(0);
+        let _deck_b = engine.create_deck(1);
+        engine.set_crossfade(0.0); // full deck A in the master
+        engine.set_cue(0, true); // even cued, cue_mix=1 should mute the cue bus
+        engine.set_cue_mix(1.0);
+
+        let (master, cue) = deck_a_master_and_cue_rms(&mut engine, &mut deck_a, 440.0, 0.2);
+        assert!(
+            (master - cue).abs() < 1e-4,
+            "cue_mix=1 → phones must equal the master (master {master}, cue {cue})"
         );
     }
 

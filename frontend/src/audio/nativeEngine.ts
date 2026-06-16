@@ -255,8 +255,7 @@ export function createNativeEngine(): AudioEngine {
       reset: () => {},
       setVolume: (volume) => send('set_volume', { deck, gain: volume }),
       setEq: (band, value) => send('set_eq', { deck, band, value }),
-      // Cue tap lands with the native cue routing (part 5).
-      setCue: () => {},
+      setCue: (on) => send('set_cue', { deck, on }),
       setFx: (kind) =>
         kind === null ? send('clear_fx', { deck }) : send('set_fx', { deck, kind: FX_ARG[kind] }),
       setFxAmount: (amount) => send('set_fx_amount', { deck, amount }),
@@ -360,8 +359,10 @@ export function createNativeEngine(): AudioEngine {
     // Audio is always running in the native engine — no Web Audio resume gesture.
     resume: () => Promise.resolve(),
     setCrossfade: (position) => send('set_crossfade', { position }),
-    // Cue blend / routing / tap land with the native cue routing (part 5).
-    setCueMix: () => {},
+    setCueMix: (position) => send('set_cue_mix', { position }),
+    // Device selection / the cue-tap capture stream is the FLX4 phones jack on the
+    // native multichannel device (engine routes the cue to channels 3/4), so the
+    // webview no longer picks a second sink — these are no-ops in the native shell.
     setCueDevice: () => Promise.resolve(),
     startCueCapture: () => Promise.resolve(),
     stopCueCapture: () => {},

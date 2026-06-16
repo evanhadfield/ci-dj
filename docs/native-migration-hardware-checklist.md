@@ -42,3 +42,21 @@ Run the native stack with `just tauri-dev-native` (Tauri app + sidecars; needs
 - [ ] Killing a sidecar process emits `worker_died`; the deck goes silent without
       crashing the app. (In-process auto-restart / model-switch is a follow-up.)
 - [ ] Quitting the app cleanly kills the sidecar processes (no orphans).
+
+## Part 5 — Native cue routing
+
+The engine derives a headphone-cue feed (PFL bus blended with master per the cue
+mix) and the device routes it to channels 3/4 on a ≥4-channel output (the FLX4).
+Replaces the second-sink cue (ADR-0006) and the backend `sounddevice` sink
+(ADR-0007). (`sounddevice` + `cue.py` + `/ws/cue` are retired at cutover, part 7,
+with the browser path that still depends on them.)
+
+- [ ] FLX4 selected as the output: master plays on the main out (channels 1/2)
+      and the cue plays on the phones jack (channels 3/4).
+- [ ] Cue a deck (PFL): it is audible in the phones even when crossfaded fully
+      out of the master.
+- [ ] The cue-mix knob blends cue ↔ master in the phones (0 = cue, 1 = master).
+- [ ] On a plain stereo output device the master is unaffected and the cue is
+      simply absent (no crash, no glitch).
+- [ ] Booth output (a third pair mirroring the master) — follow-up, not yet
+      wired.

@@ -104,6 +104,8 @@ enum Command {
     ClearFx(usize),
     SetTrim(usize, f32),
     SetOnAir(usize, bool),
+    SetCue(usize, bool),
+    SetCueMix(f32),
     LoadTrack(usize, Vec<f32>),
     UnloadTrack(usize),
     PlayTrack(usize),
@@ -256,7 +258,7 @@ impl Host {
     /// decks simply render silence (their rings stay empty), which is fine: the
     /// render thread keeps the output ring filled and control/read-back work
     /// headlessly with no device and no feed.
-    pub fn new() -> (Host, OutputConsumer, [DeckHandle; DECK_COUNT]) {
+    pub fn new() -> (Host, OutputConsumer, OutputConsumer, [DeckHandle; DECK_COUNT]) {
         let mut engine = Engine::new();
         // create_deck returns the producer half; collect the two handles to hand
         // back to the caller (the sidecar feed).
@@ -265,8 +267,9 @@ impl Host {
         let telemetry = engine.telemetry();
 
         let (cmd_tx, cmd_rx) = RingBuffer::<Command>::new(COMMAND_QUEUE_DEPTH);
-        let (out_tx, out_rx) =
-            RingBuffer::<f32>::new(OUTPUT_RING_FRAMES * CHANNELS as usize);
+        let (out_tx, out_rx) = RingBuffer::<f32>::new(OUTPUT_RING_FRAMES * CHANNELS as usize);
+        // The headphone-cue ring, same size as the master ring (Slice 5).
+        let (cue_tx, cue_rx) = RingBuffer::<f32>::new(OUTPUT_RING_FRAMES * CHANNELS as usize);
         let snapshot = Arc::new(Mutex::new(Snapshot::empty()));
         let stop = Arc::new(AtomicBool::new(false));
 
@@ -274,14 +277,13 @@ impl Host {
             consumer: out_rx,
             telemetry: telemetry.clone(),
         };
+        let cue_output = OutputConsumer {
+            consumer: cue_rx,
+            telemetry: telemetry.clone(),
+        };
 
-        let render_thread = spawn_render_thread(
-            engine,
-            cmd_rx,
-            out_tx,
-            snapshot.clone(),
-            stop.clone(),
-        );
+        let render_thread =
+            spawn_render_thread(engine, cmd_rx, out_tx, cue_tx, snapshot.clone(), stop.clone());
 
         let host = Host {
             commands: Mutex::new(cmd_tx),
@@ -290,7 +292,7 @@ impl Host {
             stop,
             render_thread: Some(render_thread),
         };
-        (host, output, handles)
+        (host, output, cue_output, handles)
     }
 
     /// Enqueue a command for the render thread. Drops the command (logged) if the
@@ -344,6 +346,14 @@ impl Host {
 
     pub fn set_on_air(&self, deck: usize, on: bool) {
         self.send(Command::SetOnAir(deck, on));
+    }
+
+    pub fn set_cue(&self, deck: usize, on: bool) {
+        self.send(Command::SetCue(deck, on));
+    }
+
+    pub fn set_cue_mix(&self, position: f32) {
+        self.send(Command::SetCueMix(position));
     }
 
     /// Load a decoded track onto a deck. `samples` is built/owned by the caller
@@ -508,6 +518,7 @@ fn spawn_render_thread(
     engine: Engine,
     commands: Consumer<Command>,
     output: Producer<f32>,
+    cue_output: Producer<f32>,
     snapshot: Arc<Mutex<Snapshot>>,
     stop: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
@@ -523,6 +534,8 @@ fn spawn_render_thread(
                 telemetry,
                 telemetry_set: false,
                 block: vec![0.0f32; RENDER_BLOCK_FRAMES * CHANNELS as usize],
+                cue_output,
+                cue_block: vec![0.0f32; RENDER_BLOCK_FRAMES * CHANNELS as usize],
             };
             while !stop.load(Ordering::Relaxed) {
                 if !loop_state.step() {
@@ -551,6 +564,13 @@ struct RenderLoop {
     /// Reusable render scratch; allocated once (the render thread allocates
     /// freely, but a per-block alloc would be wasteful), drained into the ring.
     block: Vec<f32>,
+    /// The headphone-cue output ring producer (Slice 5) and its render scratch.
+    /// Filled in lockstep with `block` via `render_with_cue`; the device drains it
+    /// onto the cue channels (FLX4 phones). Not drained on a stereo device — the
+    /// ring just fills and `push_all` drops the overflow, so the render thread
+    /// never blocks on it.
+    cue_output: Producer<f32>,
+    cue_block: Vec<f32>,
 }
 
 impl RenderLoop {
@@ -576,6 +596,8 @@ impl RenderLoop {
             Command::ClearFx(d) => self.engine.clear_fx(d),
             Command::SetTrim(d, db) => self.engine.set_trim(d, db),
             Command::SetOnAir(d, on) => self.engine.set_on_air(d, on),
+            Command::SetCue(d, on) => self.engine.set_cue(d, on),
+            Command::SetCueMix(p) => self.engine.set_cue_mix(p),
             Command::LoadTrack(d, samples) => self.engine.load_track(d, samples),
             Command::UnloadTrack(d) => self.engine.unload_track(d),
             Command::PlayTrack(d) => self.engine.play_track(d),
@@ -647,8 +669,10 @@ impl RenderLoop {
             crate::device::set_ftz_daz();
             self.telemetry_set = true;
         }
-        self.engine.render(&mut self.block, RENDER_BLOCK_FRAMES);
+        self.engine
+            .render_with_cue(&mut self.block, &mut self.cue_block, RENDER_BLOCK_FRAMES);
         push_all(&mut self.output, &self.block);
+        push_all(&mut self.cue_output, &self.cue_block);
         self.publish_snapshot();
         true
     }
@@ -695,10 +719,13 @@ mod tests {
             let (cmd_tx, cmd_rx) = RingBuffer::<Command>::new(COMMAND_QUEUE_DEPTH);
             let (out_tx, out_rx) =
                 RingBuffer::<f32>::new(OUTPUT_RING_FRAMES * CHANNELS as usize);
-            // Leak the consumer for the lifetime of the test so the output ring's
-            // producer stays valid without a device draining it (full-ring is fine
-            // — push_all just drops the overflow).
+            let (cue_tx, cue_rx) =
+                RingBuffer::<f32>::new(OUTPUT_RING_FRAMES * CHANNELS as usize);
+            // Leak the consumers for the lifetime of the test so the ring producers
+            // stay valid without a device draining them (full-ring is fine —
+            // push_all just drops the overflow).
             std::mem::forget(out_rx);
+            std::mem::forget(cue_rx);
             let snapshot = Arc::new(Mutex::new(Snapshot::empty()));
             TestHost {
                 commands: cmd_tx,
@@ -710,6 +737,8 @@ mod tests {
                     telemetry,
                     telemetry_set: true, // skip FTZ/DAZ in the test
                     block: vec![0.0f32; RENDER_BLOCK_FRAMES * CHANNELS as usize],
+                    cue_output: cue_tx,
+                    cue_block: vec![0.0f32; RENDER_BLOCK_FRAMES * CHANNELS as usize],
                 },
                 deck_handles,
             }
@@ -953,7 +982,7 @@ mod tests {
     /// thread actually applies commands and publishes the snapshot.
     #[test]
     fn spawned_host_applies_commands_headless() {
-        let (host, _output, mut handles) = Host::new();
+        let (host, _output, _cue_output, mut handles) = Host::new();
 
         // load_track + play_track through the public control surface.
         host.load_track(1, ramp_track(10_000));

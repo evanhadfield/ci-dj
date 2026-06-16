@@ -78,9 +78,9 @@ struct SidecarStatus {
 /// The device-start path is graceful: a missing device leaves the host running
 /// headlessly with `device_started = false`.
 fn start_audio() -> (Host, AudioState, [DeckHandle; slipmate_engine::DECK_COUNT]) {
-    let (host, output, deck_handles) = Host::new();
+    let (host, output, cue_output, deck_handles) = Host::new();
 
-    let (stream, device_started) = match engine_device::run_host_stream(output) {
+    let (stream, device_started) = match engine_device::run_host_stream(output, cue_output) {
         Ok(stream) => {
             let info = stream.info();
             // Non-RT setup logging only; the RT callback itself logs nothing.
@@ -197,6 +197,8 @@ pub fn run() {
             commands::clear_fx,
             commands::set_trim,
             commands::set_on_air,
+            commands::set_cue,
+            commands::set_cue_mix,
             commands::load_track,
             commands::unload_track,
             commands::play_track,

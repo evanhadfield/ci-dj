@@ -144,18 +144,31 @@ fn open_output(
 /// On any sandbox/headless condition this returns [`DeviceError::Unavailable`]
 /// without hanging — the host keeps running headlessly (its render thread fills
 /// the ring; with no device nothing drains it, which is fine).
-pub fn run_host_stream(mut output: OutputConsumer) -> Result<AudioStream, DeviceError> {
+pub fn run_host_stream(
+    mut output: OutputConsumer,
+    mut cue: OutputConsumer,
+) -> Result<AudioStream, DeviceError> {
     let (device, config, info) = open_output()?;
     let device_channels = info.device_channels as usize;
 
+    // The cue feed routes to device channels 2/3 when the device has ≥4 channels
+    // (the FLX4 phones jack, ADR-0007's native replacement). On a stereo / 3-ch
+    // device there is nowhere to put it: the cue ring is simply not drained (the
+    // render thread's push_all drops its overflow, so nothing stalls).
+    let cue_routed = device_channels >= 4;
+
     let mut first_call = true;
-    // Per-callback scratch for wide (>2ch) devices: the ring holds interleaved
-    // stereo, so on a wider device we drain stereo into this scratch and spread it
+    // Per-callback scratch for wide (>2ch) devices: the rings hold interleaved
+    // stereo, so on a wider device we drain stereo into these scratches and spread
     // into the device buffer (extra channels zeroed). Sized ONCE here, off the RT
-    // path, for a generous worst-case block; the callback never resizes it.
+    // path, for a generous worst-case block; the callback never resizes them.
     let mut scratch: Vec<f32> = Vec::new();
+    let mut cue_scratch: Vec<f32> = Vec::new();
     if device_channels != CHANNELS as usize {
         scratch_reserve(&mut scratch, REQUESTED_BUFFER as usize * 4);
+        if cue_routed {
+            scratch_reserve(&mut cue_scratch, REQUESTED_BUFFER as usize * 4);
+        }
     }
 
     let err_fn = |e| eprintln!("slipmate-engine: stream error: {e}");
@@ -179,6 +192,14 @@ pub fn run_host_stream(mut output: OutputConsumer) -> Result<AudioStream, Device
                         let want = frames * CHANNELS as usize;
                         let usable = scratch.len().min(want);
                         output.drain_into(&mut scratch[..usable]);
+                        // Drain the cue into channels 2/3 when the device has room.
+                        let cue_usable = if cue_routed {
+                            let u = cue_scratch.len().min(want);
+                            cue.drain_into(&mut cue_scratch[..u]);
+                            u
+                        } else {
+                            0
+                        };
                         for f in 0..frames {
                             let base = f * dev_ch;
                             if f * CHANNELS as usize + 1 < usable {
@@ -188,8 +209,17 @@ pub fn run_host_stream(mut output: OutputConsumer) -> Result<AudioStream, Device
                                 data[base] = 0.0;
                                 data[base + 1] = 0.0;
                             }
-                            for c in 2..dev_ch {
-                                data[base + c] = 0.0;
+                            // Cue → channels 2/3 (FLX4 phones); other channels zero.
+                            if cue_routed && f * CHANNELS as usize + 1 < cue_usable {
+                                data[base + 2] = cue_scratch[2 * f];
+                                data[base + 3] = cue_scratch[2 * f + 1];
+                                for c in 4..dev_ch {
+                                    data[base + c] = 0.0;
+                                }
+                            } else {
+                                for c in 2..dev_ch {
+                                    data[base + c] = 0.0;
+                                }
                             }
                         }
                     }

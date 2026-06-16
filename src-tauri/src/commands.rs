@@ -262,6 +262,20 @@ pub fn set_on_air(state: tauri::State<'_, Host>, deck: usize, on: bool) {
     }
 }
 
+/// Headphone-cue (PFL) tap for a deck (Slice 5).
+#[tauri::command]
+pub fn set_cue(state: tauri::State<'_, Host>, deck: usize, on: bool) {
+    if valid_deck(deck) {
+        state.set_cue(deck, on);
+    }
+}
+
+/// Cue/master headphone blend (0 = cue only, 1 = master).
+#[tauri::command]
+pub fn set_cue_mix(state: tauri::State<'_, Host>, position: f32) {
+    state.set_cue_mix(position);
+}
+
 // --- Playback deck transport ---
 
 /// Decode interleaved-stereo f32 (little-endian) from a raw byte payload. The
