@@ -459,6 +459,17 @@ impl Sidecars {
             None => Err("deck has no sidecar".to_string()),
         }
     }
+
+    /// Tear down every sidecar (each `Sidecar`'s `Drop` kills + reaps its child).
+    /// Called explicitly from the app's `RunEvent::Exit` handler because Tauri does
+    /// NOT drop managed state on a macOS quit (`process::exit` skips destructors);
+    /// the Python sidecars also self-terminate on the socket EOF, but this makes
+    /// the teardown deterministic.
+    pub fn shutdown(&self) {
+        for slot in &self.decks {
+            slot.lock().unwrap_or_else(|p| p.into_inner()).take();
+        }
+    }
 }
 
 impl Drop for Sidecar {
@@ -513,7 +524,9 @@ fn accept_with_timeout(
 /// (part 6) differ without a recompile; arguments `--deck`/`--model`/`--port`
 /// are always appended.
 pub fn sidecar_command(deck_id: &str, model: &str, port: u16) -> io::Result<Command> {
-    let spec = std::env::var("SLIPMATE_SIDECAR_CMD")
+    let overridden = std::env::var("SLIPMATE_SIDECAR_CMD");
+    let spec = overridden
+        .clone()
         .unwrap_or_else(|_| "uv run python -m slipmate.sidecar".to_string());
     let mut parts = spec.split_whitespace();
     let program = parts
@@ -529,6 +542,11 @@ pub fn sidecar_command(deck_id: &str, model: &str, port: u16) -> io::Result<Comm
         "--port",
         &port.to_string(),
     ]);
+    if overridden.is_err() {
+        // The default `uv run` needs the backend project dir as its CWD; a packaged
+        // build sets SLIPMATE_SIDECAR_CMD (the frozen binary) and controls CWD.
+        cmd.current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../backend"));
+    }
     Ok(cmd)
 }
 

@@ -7,6 +7,7 @@ magenta_rt (ADR-0002); it only forwards between the worker queues and the
 socket.
 """
 
+import argparse
 import asyncio
 import contextlib
 import json
@@ -20,6 +21,7 @@ import time
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
@@ -132,12 +134,20 @@ class DeckProcess:
 decks: dict[str, DeckProcess] = {}
 
 
+# Generation-only mode (Phase 2 / native gap 2): when the Rust shell hosts the
+# realtime decks (the sidecars), this server runs ONLY the generation RPC
+# (/api/render, /api/generate) and skips spawning the deck workers. `main()` sets
+# this before uvicorn starts, so the lifespan reads the final value.
+_generation_only = False
+
+
 @contextlib.asynccontextmanager
 async def _deck_lifespan(_: FastAPI):
-    for deck_id in DECK_IDS:
-        deck = DeckProcess(deck_id, DEFAULT_MODEL)
-        deck.start()
-        decks[deck_id] = deck
+    if not _generation_only:
+        for deck_id in DECK_IDS:
+            deck = DeckProcess(deck_id, DEFAULT_MODEL)
+            deck.start()
+            decks[deck_id] = deck
     yield
     for deck in decks.values():
         deck.shutdown()
@@ -652,14 +662,38 @@ if FRONTEND_DIST.is_dir():
 
 
 def main() -> None:
+    global _generation_only
     logging.basicConfig(level=logging.INFO)
-    if not FRONTEND_DIST.is_dir():
+    parser = argparse.ArgumentParser(description="SlipMate backend controller")
+    parser.add_argument(
+        "--generation-only",
+        action="store_true",
+        help="run only the generation RPC (no deck workers) — the native shell "
+        "hosts the realtime decks (Phase 2 gap 2)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=8000, help="loopback port to bind (default 8000)"
+    )
+    args = parser.parse_args()
+    _generation_only = args.generation_only
+
+    if args.generation_only:
+        # The webview loads from the Tauri asset host and fetches this server
+        # cross-origin over loopback, so allow it. Loopback-bound; not exposed.
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        logger.info("generation-only mode on :%d (no deck workers)", args.port)
+    elif not FRONTEND_DIST.is_dir():
         logger.warning(
             "frontend build not found at %s — run `npm run build` in frontend/ "
             "(the WebSocket API works regardless)",
             FRONTEND_DIST,
         )
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=args.port)
 
 
 if __name__ == "__main__":

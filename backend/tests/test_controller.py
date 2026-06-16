@@ -649,3 +649,30 @@ def test_render_validates_the_trust_boundary(client, render_worker, body):
     response = client.post("/api/render", json=body)
     assert response.status_code == 422
     assert render_worker.cmd_queue.empty()
+
+
+def test_generation_only_skips_deck_workers(monkeypatch):
+    """--generation-only mode (the native shell hosts the realtime decks): the
+    lifespan must NOT spawn DeckProcess workers."""
+    spawned: list[str] = []
+
+    class SpyDeck:
+        def __init__(self, deck_id, model):
+            spawned.append(deck_id)
+
+        def start(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(controller, "DeckProcess", SpyDeck)
+    monkeypatch.setattr(controller, "_generation_only", True)
+    controller.decks.clear()
+
+    # Entering the TestClient context runs the lifespan startup + shutdown.
+    with TestClient(controller.app):
+        pass
+
+    assert spawned == []
+    assert controller.decks == {}

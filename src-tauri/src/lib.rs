@@ -38,6 +38,7 @@ use slipmate_engine::DeckHandle;
 use tauri::Manager;
 
 mod commands;
+mod generation;
 mod sidecar;
 
 /// The default per-deck model the sidecars load (mirrors `controller.py`
@@ -164,16 +165,24 @@ fn start_sidecars(
 /// (and the integration harness) confirm the shell loaded and the device-start
 /// path ran. The full engine surface lives in [`commands`].
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AppInfo {
     version: String,
     audio_device_started: bool,
+    /// The loopback port the generation server bound (`None` if disabled / not
+    /// running). The webview builds the `/api/*` base URL from it (gap 2).
+    generation_port: Option<u16>,
 }
 
 #[tauri::command]
-fn app_info(state: tauri::State<'_, AudioState>) -> AppInfo {
+fn app_info(
+    state: tauri::State<'_, AudioState>,
+    generation: tauri::State<'_, generation::GenerationServer>,
+) -> AppInfo {
     AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         audio_device_started: state.device_started,
+        generation_port: generation.port(),
     }
 }
 
@@ -193,10 +202,14 @@ pub fn run() {
             let taps = sidecar::PcmTaps::new(slipmate_engine::DECK_COUNT);
             let (sidecars, idle_handles) =
                 start_sidecars(&app.handle().clone(), deck_handles, &taps);
+            // The sa3/Magenta generation server (gap 2): the gen-only FastAPI on a
+            // loopback port the webview fetches; gated behind SLIPMATE_SIDECARS.
+            let generation_server = generation::GenerationServer::start();
             app.manage(host);
             app.manage(audio_state);
             app.manage(sidecars);
             app.manage(taps);
+            app.manage(generation_server);
             app.manage(IdleHandles(Mutex::new(idle_handles)));
             Ok(())
         })
@@ -240,6 +253,19 @@ pub fn run() {
             commands::subscribe_deck_pcm,
             commands::unsubscribe_deck_pcm,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        // Tauri does NOT drop managed state on a macOS quit (tao's event loop ends
+        // in `process::exit`, which skips destructors), so the spawned Python
+        // servers' `Drop` would never run — leaking them as orphans. Kill them
+        // explicitly on `RunEvent::Exit`. (The sidecars also self-terminate on the
+        // socket EOF; the generation server has no parent link, so this is the only
+        // thing that reaps it.)
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                app.state::<generation::GenerationServer>().shutdown();
+                app.state::<sidecar::Sidecars>().shutdown();
+            }
+        });
 }

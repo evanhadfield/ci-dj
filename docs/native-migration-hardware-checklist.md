@@ -109,6 +109,20 @@ status arrives as `sidecar://status` events (`useDeck` selects this with
         `worker_died` recoverable by re-selecting. Known follow-up: the old
         model's already-buffered ~3 s of ring PCM is not flushed on switch (needs
         an engine-side realtime-ring reset), so a brief old-model tail can play.
-  - [ ] The sa3 pad/track HTTP generation path (`/api/render`, `/api/generate`)
-        rehosted for the native app.
+  - [x] The sa3 pad/track HTTP generation path (`/api/render`, `/api/generate`)
+        rehosted for the native app. — done: the Rust shell spawns the FastAPI
+        controller `--generation-only` on a loopback port (`generation.rs`), the
+        webview fetches it via `getApiBaseUrl()` (CORS on; CSP left null/permissive
+        — tightening is a security follow-up). On the live stack, verify:
+    - [ ] Pad generation (Magenta `/api/render`) and track generation (sa3
+          `/api/generate`) work in the native app.
+    - [ ] Quitting the app kills the generation server (no orphaned uvicorn /
+          loopback-port + model leak) — `RunEvent::Exit` handles this since macOS
+          `process::exit` skips managed-state `Drop`. Same for the sidecars.
+    - [ ] Style sampling (`/api/deck/{id}/style-sample`) — NOT yet wired in native
+          (the gen server has no deck workers); follow-up: route the embed to the
+          sidecar (`embed_sample` over `FRAME_CONTROL`, which `worker.py` handles).
+    - [ ] Dev: `just tauri-dev-native` launches the gen server + sidecars (the
+          default `uv run` uses the backend dir as CWD; override with
+          `SLIPMATE_GENERATION_CMD` / `SLIPMATE_SIDECAR_CMD`).
   - [ ] Remove the now-inert browser cue UI (phones picker / `cueStream`).

@@ -53,6 +53,24 @@ export function isTauri(): boolean {
   return tauriGlobal() !== null
 }
 
+let apiBaseUrlPromise: Promise<string> | null = null
+
+/** Base URL for the backend `/api/*` generation endpoints (sa3/Magenta pad+track
+ * render). In the native shell FastAPI no longer serves the UI, so the Rust shell
+ * runs a generation-only server on a loopback port it reports via `app_info`
+ * (gap 2); the webview fetches `http://127.0.0.1:<port>/api/...`. In the browser /
+ * dev it's empty, so the existing relative URLs hit the FastAPI origin / Vite
+ * proxy unchanged. Resolved once and cached. */
+export function getApiBaseUrl(): Promise<string> {
+  if (!isTauri()) return Promise.resolve('')
+  if (!apiBaseUrlPromise) {
+    apiBaseUrlPromise = invoke<{ generationPort: number | null }>('app_info')
+      .then((info) => (info.generationPort ? `http://127.0.0.1:${info.generationPort}` : ''))
+      .catch(() => '')
+  }
+  return apiBaseUrlPromise
+}
+
 /** Fire a command at the Rust engine. Rejects (caught by callers that care) when
  * the IPC bridge is absent — never throws synchronously. */
 function invoke<T = void>(cmd: string, args?: unknown, options?: unknown): Promise<T> {

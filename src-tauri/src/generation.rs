@@ -1,0 +1,159 @@
+//! Generation server supervision (Phase 2 / native gap 2).
+//!
+//! The native shell hosts the realtime decks (the inference sidecars, [`crate::sidecar`])
+//! and serves the frontend from the Tauri asset host, so FastAPI no longer serves
+//! the UI. But the Stable Audio 3 / Magenta pad+track GENERATION still lives behind
+//! HTTP (`/api/render`, `/api/generate`). This module spawns the existing FastAPI
+//! controller in `--generation-only` mode on a loopback port — no deck workers, no
+//! static mount — and the webview fetches it via `getApiBaseUrl()`.
+//!
+//! Mirrors the sidecar's spawn/supervise/Drop-kill pattern. Gated behind the same
+//! `SLIPMATE_SIDECARS` migration flag; a failed/disabled spawn just leaves
+//! generation unreachable (the UI already surfaces those as fetch errors), with
+//! `port() == None`.
+
+use std::io;
+use std::net::{TcpListener, TcpStream};
+use std::path::Path;
+use std::process::{Child, Command};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+/// The supervised generation server: its chosen loopback port (exposed to the
+/// webview via `app_info`) and the child process. Held in Tauri managed state;
+/// dropping it kills the child.
+pub struct GenerationServer {
+    port: Option<u16>,
+    child: Mutex<Option<Child>>,
+}
+
+impl GenerationServer {
+    /// Spawn the generation server (gated behind `SLIPMATE_SIDECARS`). Never fails
+    /// the app: a disabled or failed spawn yields `port() == None` and generation
+    /// is simply unreachable until enabled.
+    pub fn start() -> GenerationServer {
+        if std::env::var("SLIPMATE_SIDECARS").is_err() {
+            return GenerationServer {
+                port: None,
+                child: Mutex::new(None),
+            };
+        }
+        match Self::spawn() {
+            Ok((port, child)) => {
+                println!("slipmate-app: generation server on 127.0.0.1:{port}");
+                GenerationServer {
+                    port: Some(port),
+                    child: Mutex::new(Some(child)),
+                }
+            }
+            Err(e) => {
+                eprintln!("slipmate-app: generation server spawn failed: {e}");
+                GenerationServer {
+                    port: None,
+                    child: Mutex::new(None),
+                }
+            }
+        }
+    }
+
+    fn spawn() -> io::Result<(u16, Child)> {
+        // Pick a free loopback port, then hand it to the child (uvicorn binds it).
+        // The brief drop→rebind window on loopback is benign.
+        let port = {
+            let listener = TcpListener::bind("127.0.0.1:0")?;
+            listener.local_addr()?.port()
+        };
+        let mut child = generation_command(port)?.spawn()?;
+
+        // Confirm the child actually came up before advertising the port — a
+        // failed launch (bad CWD / import error) or a lost port race would
+        // otherwise leave the app pointing the webview at a dead port. Bounded so
+        // a slow-but-working server is reported optimistically rather than
+        // blocking the window; a child that EXITS is reported as a failure.
+        let deadline = Instant::now() + Duration::from_millis(1500);
+        let addr = ("127.0.0.1", port);
+        loop {
+            if TcpStream::connect(addr).is_ok() {
+                return Ok((port, child));
+            }
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                let _ = child.wait();
+                return Err(io::Error::other("generation server exited before binding"));
+            }
+            if Instant::now() >= deadline {
+                return Ok((port, child)); // still launching; advertise optimistically
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// The loopback port the generation server bound, or `None` if disabled / not
+    /// running. The webview reads this through `app_info` to build the API base URL.
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    /// Kill the generation server child. Called explicitly from the app's
+    /// `RunEvent::Exit` handler because Tauri does NOT drop managed state on a
+    /// macOS quit (`process::exit` skips destructors), so [`Drop`] alone would
+    /// leak the process.
+    pub fn shutdown(&self) {
+        if let Some(mut child) = self.child.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for GenerationServer {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+/// Build the command that launches the generation-only FastAPI server. Overridable
+/// via `SLIPMATE_GENERATION_CMD` (default `uv run python -m slipmate.controller`)
+/// so dev vs. the packaged binary differ without a recompile, like
+/// `SLIPMATE_SIDECAR_CMD`; `--generation-only` and `--port` are always appended.
+pub fn generation_command(port: u16) -> io::Result<Command> {
+    let overridden = std::env::var("SLIPMATE_GENERATION_CMD");
+    let spec = overridden
+        .clone()
+        .unwrap_or_else(|_| "uv run python -m slipmate.controller".to_string());
+    let mut parts = spec.split_whitespace();
+    let program = parts.next().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "empty SLIPMATE_GENERATION_CMD")
+    })?;
+    let mut cmd = Command::new(program);
+    cmd.args(parts);
+    cmd.args(["--generation-only", "--port", &port.to_string()]);
+    if overridden.is_err() {
+        // The default `uv run` needs the backend project dir as its CWD; a packaged
+        // build sets SLIPMATE_GENERATION_CMD (the frozen binary) and controls CWD.
+        cmd.current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../backend"));
+    }
+    Ok(cmd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generation_command_appends_the_flags() {
+        // SAFETY-ish: no other test reads SLIPMATE_GENERATION_CMD; cleared after.
+        std::env::set_var("SLIPMATE_GENERATION_CMD", "echo hi");
+        let cmd = generation_command(5123).unwrap();
+        let argv: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(cmd.get_program().to_string_lossy(), "echo");
+        assert_eq!(argv, ["hi", "--generation-only", "--port", "5123"]);
+        std::env::remove_var("SLIPMATE_GENERATION_CMD");
+    }
+
+    #[test]
+    fn disabled_without_the_env_flag() {
+        std::env::remove_var("SLIPMATE_SIDECARS");
+        let server = GenerationServer::start();
+        assert_eq!(server.port(), None);
+    }
+}

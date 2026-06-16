@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { DeckId } from '../audio/engine'
+import { getApiBaseUrl } from '../audio/nativeEngine'
 import { useControlBus } from '../control/busContext'
 import { CrateBrowser } from '../crates/CrateBrowser'
 import type { StylePreset } from '../presets'
@@ -180,8 +181,9 @@ export function MediaExplorer({
     ])
     void (async () => {
       try {
+        const apiBase = await getApiBaseUrl()
         const response = await fetch(
-          requestEngine === 'magenta' ? '/api/render' : '/api/generate',
+          `${apiBase}${requestEngine === 'magenta' ? '/api/render' : '/api/generate'}`,
           {
             method: 'POST',
             headers: { 'content-type': 'application/json' },

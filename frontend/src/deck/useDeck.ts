@@ -20,7 +20,7 @@ import {
 import { createLoudnessTracker, trimDbFor } from '../audio/master'
 import { STYLE_SAMPLE_SECONDS } from '../audio/styleSample'
 import { useAudioEngine } from '../audio/engineContext'
-import { isTauri } from '../audio/nativeEngine'
+import { getApiBaseUrl, isTauri } from '../audio/nativeEngine'
 import {
   sendNativeDeckCommand,
   subscribeSidecarStatus,
@@ -1267,10 +1267,13 @@ export function useDeck(deckId: DeckId): DeckControls {
         try {
           // The channel is created on demand: pads can fill before the
           // deck has ever played (prepping weapons before the set).
+          // Resolve the API base only in the native shell — the web/dev path
+          // keeps relative URLs (and its exact fetch timing) untouched.
+          const apiBase = isTauri() ? await getApiBaseUrl() : ''
           const [channel, response] = await Promise.all([
             ensureChannel(),
             fetch(
-              engine === 'magenta' ? '/api/render' : '/api/generate',
+              `${apiBase}${engine === 'magenta' ? '/api/render' : '/api/generate'}`,
               {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },

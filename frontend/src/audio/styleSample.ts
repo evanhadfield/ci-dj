@@ -5,6 +5,8 @@
  * referencing the id runs after the embed, so the pad target can be
  * added the moment the POST resolves. */
 
+import { getApiBaseUrl } from './nativeEngine'
+
 /** What "the sound of this deck, right now" means: the last N seconds
  * of played audio (the spike judged 10 s by ear, ADR-0011). */
 export const STYLE_SAMPLE_SECONDS = 10
@@ -34,8 +36,12 @@ export async function uploadStyleSample(
   sampleId: string,
   samples: Float32Array<ArrayBuffer>,
 ): Promise<void> {
+  // NOTE: in the native shell this hits the generation-only server, which does
+  // NOT host the deck workers — native style sampling needs the embed routed to
+  // the sidecar (a documented follow-up). The base is empty on the web/dev path.
+  const apiBase = await getApiBaseUrl()
   const response = await fetch(
-    `/api/deck/${deckId}/style-sample?id=${encodeURIComponent(sampleId)}`,
+    `${apiBase}/api/deck/${deckId}/style-sample?id=${encodeURIComponent(sampleId)}`,
     { method: 'POST', body: samples.buffer },
   )
   if (!response.ok) {
