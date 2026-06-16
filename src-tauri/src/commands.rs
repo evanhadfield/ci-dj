@@ -278,6 +278,19 @@ pub fn set_cue_mix(state: tauri::State<'_, Host>, position: f32) {
     state.set_cue_mix(position);
 }
 
+/// Start recording the master bus (exactly the speaker feed).
+#[tauri::command]
+pub fn start_recording(state: tauri::State<'_, Host>) {
+    state.start_recording();
+}
+
+/// Stop recording and return the take as a 16-bit PCM WAV (binary — the take can
+/// be many MB, so a JSON number array is not viable).
+#[tauri::command]
+pub fn stop_recording(state: tauri::State<'_, Host>) -> tauri::ipc::Response {
+    tauri::ipc::Response::new(state.stop_recording())
+}
+
 // --- Playback deck transport ---
 
 /// Decode interleaved-stereo f32 (little-endian) from a raw byte payload. The

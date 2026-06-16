@@ -225,6 +225,8 @@ pub fn run() {
             commands::set_on_air,
             commands::set_cue,
             commands::set_cue_mix,
+            commands::start_recording,
+            commands::stop_recording,
             commands::load_track,
             commands::unload_track,
             commands::play_track,

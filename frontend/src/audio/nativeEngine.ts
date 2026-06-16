@@ -386,9 +386,11 @@ export function createNativeEngine(): AudioEngine {
     stopCueCapture: () => {},
     getMasterLevel: () => snapshot?.health.masterPeak ?? 0,
     getMasterGainReduction: () => snapshot?.health.masterGainReductionDb ?? 0,
-    // Master-bus recording is a native follow-up; surface a clear, handled error
-    // (MixerStrip shows it via `mixer.recordingError`).
-    startRecording: () => Promise.reject(new Error('recording is not yet available in the native build')),
-    stopRecording: () => Promise.reject(new Error('recording is not yet available in the native build')),
+    // The engine taps the master bus on its render thread; stop returns a WAV.
+    startRecording: () => invoke('start_recording'),
+    stopRecording: () =>
+      invoke<ArrayBuffer>('stop_recording').then(
+        (wav) => new Blob([wav], { type: 'audio/wav' }),
+      ),
   }
 }

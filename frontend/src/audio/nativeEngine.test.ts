@@ -39,6 +39,7 @@ beforeEach(() => {
   const invoke = vi.fn((cmd: string, args?: unknown) => {
     calls.push({ cmd, args })
     if (cmd === 'engine_snapshot') return Promise.resolve(snapshot)
+    if (cmd === 'stop_recording') return Promise.resolve(new ArrayBuffer(44)) // a WAV
     return Promise.resolve(undefined)
   })
   vi.stubGlobal('__TAURI__', { core: { invoke } })
@@ -218,10 +219,15 @@ describe('createNativeEngine — snapshot-backed getters', () => {
 })
 
 describe('createNativeEngine — graceful native stubs', () => {
-  it('recording rejects with a clear, handled error', async () => {
+  it('recording drives the engine commands and returns a WAV blob', async () => {
     const engine = createNativeEngine()
-    await expect(engine.startRecording()).rejects.toThrow(/native build/)
-    await expect(engine.stopRecording()).rejects.toThrow(/native build/)
+    await engine.startRecording()
+    const blob = await engine.stopRecording()
+    const cmds = calls.map((c) => c.cmd)
+    expect(cmds).toContain('start_recording')
+    expect(cmds).toContain('stop_recording')
+    expect(blob).toBeInstanceOf(Blob)
+    expect(blob.type).toBe('audio/wav')
   })
 
   it('cue + resume resolve without throwing', async () => {

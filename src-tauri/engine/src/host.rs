@@ -85,6 +85,85 @@ const COMMAND_QUEUE_DEPTH: usize = 1024;
 /// plenty, with slack so a double-press never blocks.
 const CAPTURE_REPLY_DEPTH: usize = 8;
 
+/// Max master-recording length, in interleaved samples — 30 min of stereo. A
+/// forgotten recording stops growing here rather than exhausting RAM (int16, so
+/// ~345 MB at the cap).
+const RECORDING_MAX_SAMPLES: usize = 30 * 60 * SAMPLE_RATE as usize * CHANNELS as usize;
+
+/// The master-bus recorder: the render thread appends each rendered master block
+/// (as int16 PCM) while `active`, and the IPC thread starts/stops + drains it to a
+/// WAV. The append runs on the render thread (NOT the cpal callback), which may
+/// lock + allocate; when inactive it is one relaxed atomic load and returns.
+struct Recorder {
+    active: AtomicBool,
+    buffer: Mutex<Vec<i16>>,
+}
+
+impl Recorder {
+    fn new() -> Self {
+        Recorder {
+            active: AtomicBool::new(false),
+            buffer: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Append a rendered master block (interleaved-stereo f32) as int16 PCM. A
+    /// no-op when not recording; caps at [`RECORDING_MAX_SAMPLES`].
+    fn capture(&self, block: &[f32]) {
+        if !self.active.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut buf = self.buffer.lock().unwrap_or_else(|p| p.into_inner());
+        let room = RECORDING_MAX_SAMPLES.saturating_sub(buf.len());
+        for &s in block.iter().take(room) {
+            buf.push((s.clamp(-1.0, 1.0) * 32767.0) as i16);
+        }
+    }
+
+    fn start(&self) {
+        self.buffer.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        self.active.store(true, Ordering::Release);
+    }
+
+    /// Stop and return the recording as a 16-bit PCM WAV (interleaved stereo,
+    /// 48 kHz), or an empty WAV if nothing was captured.
+    fn stop(&self) -> Vec<u8> {
+        self.active.store(false, Ordering::Release);
+        let pcm = std::mem::take(&mut *self.buffer.lock().unwrap_or_else(|p| p.into_inner()));
+        encode_wav_i16(&pcm)
+    }
+}
+
+/// Encode interleaved-stereo int16 samples as a 48 kHz WAV (the speaker feed,
+/// exactly — recorded post-limiter/clip-guard). A minimal PCM WAV writer.
+fn encode_wav_i16(samples: &[i16]) -> Vec<u8> {
+    let channels = CHANNELS as u32;
+    let sample_rate = SAMPLE_RATE;
+    let bits = 16u32;
+    let byte_rate = sample_rate * channels * bits / 8;
+    let block_align = (channels * bits / 8) as u16;
+    let data_len = (samples.len() * 2) as u32;
+
+    let mut wav = Vec::with_capacity(44 + samples.len() * 2);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // fmt chunk size
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&(channels as u16).to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&byte_rate.to_le_bytes());
+    wav.extend_from_slice(&block_align.to_le_bytes());
+    wav.extend_from_slice(&(bits as u16).to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    for &s in samples {
+        wav.extend_from_slice(&s.to_le_bytes());
+    }
+    wav
+}
+
 /// A control command enqueued by the IPC/control thread and applied on the render
 /// thread (where allocation is fine — it is NOT the cpal callback). One variant
 /// per `Engine` control method. The `Vec` buffers for `LoadTrack` /
@@ -243,6 +322,8 @@ pub struct Host {
     telemetry: Arc<Telemetry>,
     /// Stop flag for the render thread.
     stop: Arc<AtomicBool>,
+    /// Master-bus recorder; the render thread appends to it while active.
+    recorder: Arc<Recorder>,
     /// The render thread; joined on `Drop`.
     render_thread: Option<JoinHandle<()>>,
 }
@@ -272,6 +353,7 @@ impl Host {
         let (cue_tx, cue_rx) = RingBuffer::<f32>::new(OUTPUT_RING_FRAMES * CHANNELS as usize);
         let snapshot = Arc::new(Mutex::new(Snapshot::empty()));
         let stop = Arc::new(AtomicBool::new(false));
+        let recorder = Arc::new(Recorder::new());
 
         let output = OutputConsumer {
             consumer: out_rx,
@@ -282,17 +364,36 @@ impl Host {
             telemetry: telemetry.clone(),
         };
 
-        let render_thread =
-            spawn_render_thread(engine, cmd_rx, out_tx, cue_tx, snapshot.clone(), stop.clone());
+        let render_thread = spawn_render_thread(
+            engine,
+            cmd_rx,
+            out_tx,
+            cue_tx,
+            snapshot.clone(),
+            stop.clone(),
+            recorder.clone(),
+        );
 
         let host = Host {
             commands: Mutex::new(cmd_tx),
             snapshot,
             telemetry,
             stop,
+            recorder,
             render_thread: Some(render_thread),
         };
         (host, output, cue_output, handles)
+    }
+
+    /// Start recording the master bus (exactly the speaker feed — post-limiter and
+    /// clip-guard). Clears any prior take.
+    pub fn start_recording(&self) {
+        self.recorder.start();
+    }
+
+    /// Stop recording and return the take as a 16-bit PCM WAV.
+    pub fn stop_recording(&self) -> Vec<u8> {
+        self.recorder.stop()
     }
 
     /// Enqueue a command for the render thread. Drops the command (logged) if the
@@ -521,6 +622,7 @@ fn spawn_render_thread(
     cue_output: Producer<f32>,
     snapshot: Arc<Mutex<Snapshot>>,
     stop: Arc<AtomicBool>,
+    recorder: Arc<Recorder>,
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name("slipmate-render".into())
@@ -536,6 +638,7 @@ fn spawn_render_thread(
                 block: vec![0.0f32; RENDER_BLOCK_FRAMES * CHANNELS as usize],
                 cue_output,
                 cue_block: vec![0.0f32; RENDER_BLOCK_FRAMES * CHANNELS as usize],
+                recorder,
             };
             while !stop.load(Ordering::Relaxed) {
                 if !loop_state.step() {
@@ -571,6 +674,8 @@ struct RenderLoop {
     /// never blocks on it.
     cue_output: Producer<f32>,
     cue_block: Vec<f32>,
+    /// Master-bus recorder; each rendered master block is appended while active.
+    recorder: Arc<Recorder>,
 }
 
 impl RenderLoop {
@@ -673,6 +778,9 @@ impl RenderLoop {
             .render_with_cue(&mut self.block, &mut self.cue_block, RENDER_BLOCK_FRAMES);
         push_all(&mut self.output, &self.block);
         push_all(&mut self.cue_output, &self.cue_block);
+        // Tap the rendered master into the recorder if it is recording (no-op
+        // otherwise; runs on the render thread, never the cpal callback).
+        self.recorder.capture(&self.block);
         self.publish_snapshot();
         true
     }
@@ -739,6 +847,7 @@ mod tests {
                     block: vec![0.0f32; RENDER_BLOCK_FRAMES * CHANNELS as usize],
                     cue_output: cue_tx,
                     cue_block: vec![0.0f32; RENDER_BLOCK_FRAMES * CHANNELS as usize],
+                    recorder: Arc::new(Recorder::new()),
                 },
                 deck_handles,
             }
@@ -1011,5 +1120,38 @@ mod tests {
         assert_eq!(health.deck_underruns, host.telemetry.underruns());
 
         drop(host); // joins the render thread cleanly
+    }
+
+    #[test]
+    fn recorder_captures_master_to_a_pcm_wav() {
+        let rec = Recorder::new();
+
+        // Not recording → capture is a no-op; an empty stop is a valid header-only
+        // WAV.
+        rec.capture(&[0.5, -0.5, 0.5, -0.5]);
+        let empty = rec.stop();
+        assert_eq!(&empty[0..4], b"RIFF");
+        assert_eq!(&empty[8..12], b"WAVE");
+        assert_eq!(empty.len(), 44, "no samples → header only");
+
+        // Record two stereo frames.
+        rec.start();
+        rec.capture(&[0.5, -0.5]);
+        rec.capture(&[0.25, -0.25]);
+        let wav = rec.stop();
+
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[36..40], b"data");
+        // 44-byte header + 4 int16 samples (8 bytes).
+        assert_eq!(wav.len(), 44 + 8);
+        // First sample 0.5 → round(0.5 * 32767) ≈ 16383.
+        let s0 = i16::from_le_bytes([wav[44], wav[45]]);
+        assert!((s0 - 16383).abs() <= 1, "0.5 should encode near +16383, got {s0}");
+
+        // A fresh start clears the prior take.
+        rec.start();
+        let cleared = rec.stop();
+        assert_eq!(cleared.len(), 44);
     }
 }
