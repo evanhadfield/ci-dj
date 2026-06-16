@@ -44,6 +44,13 @@ pub enum FxKind {
 /// (`fx.ts` `FX_DEAD_ZONE`).
 pub const FX_DEAD_ZONE: f32 = 0.02;
 
+/// FX cutoff/centre smoothing: the `follow()` halfway-response time for the
+/// filter sweep and the noise-riser bandpass. A knob move glides the cutoff
+/// rather than rebuilding the biquad (which would reset its state — a click) or
+/// stepping the coefficients (a zipper). 15 ms matches the EQ (`graph.rs`
+/// `EQ_SMOOTH_SECS`); tunable by ear on the live stack.
+const FX_SMOOTH_SECS: f32 = 0.015;
+
 /// Whether the effect replaces the dry signal or adds to it while active
 /// (`fx.ts` `fxBlend`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +100,7 @@ fn log_sweep(from: f32, to: f32, drive: f32) -> f32 {
 /// `q_linear = 10^(1/20) ≈ 1.122` — Spike A's headline parity fix.
 const FILTER_Q: f32 = 1.122_018_5; // 10^(1/20)
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum FilterMode {
     Lowpass,
     Highpass,
@@ -321,10 +329,15 @@ impl SweepLfo {
 /// nodes. Built / reconfigured OFF the RT path (`FxInsert::set_kind` /
 /// `set_amount`); the per-frame `process` only ticks pre-built nodes + arithmetic.
 enum Effect {
-    /// Two mono biquads (one per channel). Replaced wholesale when the LP/HP
-    /// mode flips (off RT) — the flip only ever happens across the centre dead
-    /// zone where the wet path is silent anyway.
-    Filter([Box<dyn AudioUnit>; 2]),
+    /// Two mono settable filters (one per channel) reading a shared, smoothed
+    /// cutoff. Rebuilt ONLY when the LP/HP mode flips (off RT) — which only ever
+    /// happens across the centre dead zone where the wet path is silent. Within a
+    /// mode the cutoff just glides via `cutoff` (no rebuild → no click/zipper).
+    Filter {
+        chains: [Box<dyn AudioUnit>; 2],
+        cutoff: Shared,
+        mode: FilterMode,
+    },
     /// Two hand-built feedback delay lines (one per channel) + the shared feedback
     /// amount + the wet level.
     DubEcho {
@@ -343,6 +356,7 @@ enum Effect {
     Noise {
         source: Box<dyn AudioUnit>,
         bandpass: [Box<dyn AudioUnit>; 2],
+        freq: Shared,
         level: f32,
     },
     Sweep(SweepLfo),
@@ -353,7 +367,17 @@ impl Effect {
     fn build(kind: FxKind, amount: f32, sample_rate: f32) -> Self {
         match kind {
             FxKind::Filter => {
-                Effect::Filter([build_filter(amount, sample_rate), build_filter(amount, sample_rate)])
+                let (mode, freq) = filter_curve(amount);
+                let cutoff = shared(freq);
+                let chains = [
+                    build_filter(mode, &cutoff, sample_rate),
+                    build_filter(mode, &cutoff, sample_rate),
+                ];
+                Effect::Filter {
+                    chains,
+                    cutoff,
+                    mode,
+                }
             }
             FxKind::DubEcho => {
                 let (wet, feedback) = dub_echo_curve(amount);
@@ -381,12 +405,11 @@ impl Effect {
                 let mut source = white();
                 source.set_sample_rate(sample_rate as f64);
                 source.reset();
+                let freq = shared(frequency);
                 Effect::Noise {
                     source: Box::new(source),
-                    bandpass: [
-                        build_bandpass(frequency, sample_rate),
-                        build_bandpass(frequency, sample_rate),
-                    ],
+                    bandpass: [build_bandpass(&freq, sample_rate), build_bandpass(&freq, sample_rate)],
+                    freq,
                     level,
                 }
             }
@@ -403,24 +426,32 @@ fn space_curve_wet(amount: f32) -> f32 {
     clamp01(amount)
 }
 
-/// Build one channel's filter biquad for `amount` (off the RT path).
-fn build_filter(amount: f32, sample_rate: f32) -> Box<dyn AudioUnit> {
-    let (mode, freq) = filter_curve(amount);
+/// Build one channel's settable filter for `mode`, its cutoff driven by the
+/// shared `cutoff` (Hz) one-pole-smoothed by `follow()` so a sweep glides instead
+/// of stepping. fundsp's settable `lowpass()`/`highpass()` (input 0 = audio, 1 =
+/// cutoff Hz, 2 = Q) run the same `SvfCoefs` math as `lowpass_hz`/`highpass_hz`, so
+/// the settled response is unchanged. Off the RT path.
+fn build_filter(mode: FilterMode, cutoff: &Shared, sample_rate: f32) -> Box<dyn AudioUnit> {
+    let cut = var(cutoff) >> follow(FX_SMOOTH_SECS);
     let mut node: Box<dyn AudioUnit> = match mode {
-        FilterMode::Lowpass => Box::new(lowpass_hz(freq, FILTER_Q)),
-        FilterMode::Highpass => Box::new(highpass_hz(freq, FILTER_Q)),
+        FilterMode::Lowpass => Box::new((pass() | cut | dc(FILTER_Q)) >> lowpass()),
+        FilterMode::Highpass => Box::new((pass() | cut | dc(FILTER_Q)) >> highpass()),
     };
     node.set_sample_rate(sample_rate as f64);
     node.reset();
     node
 }
 
-/// Build one channel's noise bandpass for `frequency` (off the RT path).
-fn build_bandpass(frequency: f32, sample_rate: f32) -> Box<dyn AudioUnit> {
-    let mut node = bandpass_hz(frequency, NOISE_BANDPASS_Q);
+/// Build one channel's noise bandpass, its centre driven by the shared `freq` (Hz)
+/// one-pole-smoothed by `follow()`. Settable `bandpass()` (input 0 = audio, 1 =
+/// centre Hz, 2 = Q) shares the `bandpass_hz` coefficient math; built once, never
+/// rebuilt (the riser sweeps `freq`, not the node). Off the RT path.
+fn build_bandpass(freq: &Shared, sample_rate: f32) -> Box<dyn AudioUnit> {
+    let centre = var(freq) >> follow(FX_SMOOTH_SECS);
+    let mut node: Box<dyn AudioUnit> = Box::new((pass() | centre | dc(NOISE_BANDPASS_Q)) >> bandpass());
     node.set_sample_rate(sample_rate as f64);
     node.reset();
-    Box::new(node)
+    node
 }
 
 /// The per-deck Color FX insert (ADR-0008). Holds the current effect kind, its
@@ -474,12 +505,23 @@ impl FxInsert {
             return;
         }
         match &mut self.effect {
-            Effect::Filter(chains) => {
-                // Rebuild both channels' biquads to the new cutoff (and mode if it
-                // flipped). fundsp's FixedSvf has no settable coefficients, so a
-                // rebuild is the simple RT-safe choice here (off the RT path).
-                chains[0] = build_filter(amount, self.sample_rate);
-                chains[1] = build_filter(amount, self.sample_rate);
+            Effect::Filter {
+                chains,
+                cutoff,
+                mode,
+            } => {
+                // Glide the cutoff via the shared (no rebuild → no click/zipper).
+                // Rebuild both channels ONLY when the LP/HP mode flips, which only
+                // happens crossing the centre dead zone (wet silent) or on a knob
+                // jump that skips it — so the reset is inaudible; the rebuilt node's
+                // `follow()` snaps to the cutoff on its first tick.
+                let (new_mode, freq) = filter_curve(amount);
+                cutoff.set_value(freq);
+                if new_mode != *mode {
+                    *mode = new_mode;
+                    chains[0] = build_filter(new_mode, cutoff, self.sample_rate);
+                    chains[1] = build_filter(new_mode, cutoff, self.sample_rate);
+                }
             }
             Effect::DubEcho { feedback, wet, .. } => {
                 let (w, fb) = dub_echo_curve(amount);
@@ -493,11 +535,12 @@ impl FxInsert {
                 let (bits, reduction) = crush_curve(amount);
                 crusher.reconfigure(bits, reduction);
             }
-            Effect::Noise { bandpass, level, .. } => {
+            Effect::Noise { freq, level, .. } => {
+                // Glide the bandpass centre via the shared; the level is a plain
+                // gain on the (non-deterministic) noise. No rebuild.
                 let (lvl, frequency) = noise_curve(amount);
                 *level = lvl;
-                bandpass[0] = build_bandpass(frequency, self.sample_rate);
-                bandpass[1] = build_bandpass(frequency, self.sample_rate);
+                freq.set_value(frequency);
             }
             Effect::Sweep(lfo) => {
                 let (rate, depth) = sweep_curve(amount);
@@ -536,7 +579,7 @@ impl FxInsert {
         let mut in1 = [0.0f32; 1];
         let mut out1 = [0.0f32; 1];
         match &mut self.effect {
-            Effect::Filter(chains) => {
+            Effect::Filter { chains, .. } => {
                 in1[0] = l;
                 chains[0].tick(&in1, &mut out1);
                 let wl = out1[0];
@@ -564,6 +607,7 @@ impl FxInsert {
                 source,
                 bandpass,
                 level,
+                ..
             } => {
                 // One white sample drives both channels' bandpasses (like the
                 // shared looping buffer in `fxGraphs.ts`).
@@ -590,7 +634,7 @@ impl FxInsert {
     #[allow(dead_code)] // wired up by Engine::reset in a later slice
     pub(crate) fn reset(&mut self) {
         match &mut self.effect {
-            Effect::Filter(chains) => chains.iter_mut().for_each(|c| c.reset()),
+            Effect::Filter { chains, .. } => chains.iter_mut().for_each(|c| c.reset()),
             Effect::DubEcho { lines, .. } => lines.iter_mut().for_each(|l| l.reset()),
             Effect::Space { reverb, .. } => reverb.reset(),
             Effect::Crush(crusher) => crusher.reset(),
@@ -873,6 +917,42 @@ mod tests {
         // Replace: steady-state DC through a unity-DC-gain lowpass ≈ the input,
         // NOT input + filtered (~0.8). Within a small tolerance of 0.4.
         assert!((last - 0.4).abs() < 0.02, "replace: filtered DC ≈ input, got {last}");
+    }
+
+    /// Re-sending the filter's CURRENT amount mid-stream must not disturb the wet
+    /// signal. The old `set_amount` rebuilt + `reset()` both biquads on every call,
+    /// so a redundant set (and any same-mode cutoff change) glitched — the click
+    /// heard sweeping the filter. The settable-cutoff path makes a same-mode change
+    /// a smooth shared write and a redundant one a pure no-op. (Fails on the rebuild
+    /// path: zeroing the filter state mid-tone rings, diverging the two inserts.)
+    #[test]
+    fn filter_reapplying_the_same_amount_is_a_no_op() {
+        const AMOUNT: f32 = 0.25; // lowpass ~1200 Hz, active
+        let freq = 2_000.0f32; // above the cutoff, so the filter actually attenuates
+
+        let mut ref_fx = rested(FxKind::Filter);
+        let mut set_fx = rested(FxKind::Filter);
+        ref_fx.set_amount(AMOUNT);
+        set_fx.set_amount(AMOUNT);
+
+        let dphase = 2.0 * std::f32::consts::PI * freq / SR;
+        let mut phase = 0.0f32;
+        let mut max_diff = 0.0f32;
+        for i in 0..4096 {
+            let x = phase.sin() * 0.4;
+            phase += dphase;
+            // Re-apply the same amount partway through, to one insert only.
+            if i == 2048 {
+                set_fx.set_amount(AMOUNT);
+            }
+            let (rl, rr) = ref_fx.process(x, x);
+            let (sl, sr) = set_fx.process(x, x);
+            max_diff = max_diff.max((rl - sl).abs()).max((rr - sr).abs());
+        }
+        assert!(
+            max_diff < 1e-6,
+            "re-applying the same filter amount disturbed the wet (rebuild/reset?): max diff {max_diff}"
+        );
     }
 
     /// (space/noise) Bounded + non-empty on a real input — non-deterministic, so no
