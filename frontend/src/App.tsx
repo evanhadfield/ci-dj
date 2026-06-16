@@ -371,7 +371,10 @@ function App() {
 
   return (
     <main className="app">
-      <header className="app__statusbar">
+      {/* Drag the window by the header. `deep` makes the whole subtree a drag
+          surface (logo, gaps, status text); Tauri auto-excludes clickable
+          elements (the native selects, the MIDI button) so they stay clickable. */}
+      <header className="app__statusbar" data-tauri-drag-region="deep">
         <Logo />
         <div className="app__statusbar-right">
           {ramWarning && (
