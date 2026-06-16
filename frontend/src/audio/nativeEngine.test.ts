@@ -110,6 +110,7 @@ describe('createNativeEngine — control contract', () => {
     ch.setFxAmount(0.7)
     ch.setOnAir(false)
     ch.setEq('high', 0.9)
+    flushRaf() // ship the coalesced set_fx_amount / set_eq writes
     expect(calls).toContainEqual({ cmd: 'set_fx', args: { deck: 0, kind: 'dubEcho' } })
     expect(calls).toContainEqual({ cmd: 'set_fx_amount', args: { deck: 0, amount: 0.7 } })
     expect(calls).toContainEqual({ cmd: 'set_on_air', args: { deck: 0, on: false } })
@@ -146,7 +147,99 @@ describe('createNativeEngine — control contract', () => {
     )
     calls.length = 0
     engine.setCrossfade(0.25)
+    flushRaf() // set_crossfade is coalesced per frame
     expect(calls).toContainEqual({ cmd: 'set_crossfade', args: { position: 0.25 } })
+  })
+})
+
+describe('createNativeEngine — per-frame IPC coalescing', () => {
+  // A continuous setter on one target, swept many times within a single frame,
+  // must collapse to one invoke carrying the latest value; discrete commands stay
+  // immediate and flush pending writes first so they can never be leapfrogged.
+  async function deckA() {
+    const engine = createNativeEngine()
+    const ch = await engine.createDeckChannel(
+      'a',
+      { volume: 1, eq: { low: 0.5, mid: 0.5, high: 0.5 }, cue: false, fx: { kind: null, amount: 0 }, trimDb: 0 },
+      () => {},
+    )
+    calls.length = 0
+    return { engine, ch }
+  }
+
+  it('collapses a same-band setEq sweep to one invoke with the latest value', async () => {
+    const { ch } = await deckA()
+    ch.setEq('low', 0.1)
+    ch.setEq('low', 0.2)
+    ch.setEq('low', 0.9)
+    // Nothing has shipped yet — the writes are pending the frame.
+    expect(calls.filter((c) => c.cmd === 'set_eq')).toHaveLength(0)
+    flushRaf()
+    const eqCalls = calls.filter((c) => c.cmd === 'set_eq')
+    expect(eqCalls).toHaveLength(1)
+    expect(eqCalls[0].args).toEqual({ deck: 0, band: 'low', value: 0.9 })
+  })
+
+  it('coalesces different bands independently — one invoke each', async () => {
+    const { ch } = await deckA()
+    ch.setEq('low', 0.2)
+    ch.setEq('mid', 0.3)
+    ch.setEq('low', 0.4)
+    ch.setEq('high', 0.6)
+    flushRaf()
+    const eqCalls = calls.filter((c) => c.cmd === 'set_eq')
+    expect(eqCalls).toHaveLength(3)
+    expect(eqCalls).toContainEqual({ cmd: 'set_eq', args: { deck: 0, band: 'low', value: 0.4 } })
+    expect(eqCalls).toContainEqual({ cmd: 'set_eq', args: { deck: 0, band: 'mid', value: 0.3 } })
+    expect(eqCalls).toContainEqual({ cmd: 'set_eq', args: { deck: 0, band: 'high', value: 0.6 } })
+  })
+
+  it('a discrete command flushes pending coalesced writes FIRST, then sends itself', async () => {
+    const { ch } = await deckA()
+    ch.setFxAmount(0.5) // coalesced, pending
+    ch.setFx('dub_echo') // discrete — must flush set_fx_amount before it lands
+    const cmds = calls.map((c) => c.cmd)
+    expect(cmds).toEqual(['set_fx_amount', 'set_fx'])
+    expect(calls[0].args).toEqual({ deck: 0, amount: 0.5 })
+    expect(calls[1].args).toEqual({ deck: 0, kind: 'dubEcho' })
+  })
+
+  it('a seek flushes pending coalesced writes FIRST, then sends itself', async () => {
+    const { ch } = await deckA()
+    ch.setVolume(0.7) // coalesced, pending
+    ch.seekTrack(2) // discrete
+    const cmds = calls.map((c) => c.cmd)
+    expect(cmds).toEqual(['set_volume', 'seek_track'])
+    expect(calls[0].args).toEqual({ deck: 0, gain: 0.7 })
+    expect(calls[1].args).toEqual({ deck: 0, frames: 2 * SAMPLE_RATE })
+  })
+
+  it('drops a coalesced re-send of the already-shipped value but ships a distinct one', async () => {
+    const { ch } = await deckA()
+    ch.setVolume(0.5)
+    flushRaf() // ships 0.5
+    calls.length = 0
+    ch.setVolume(0.5) // identical to the live value → dropped
+    flushRaf()
+    expect(calls.filter((c) => c.cmd === 'set_volume')).toHaveLength(0)
+    ch.setVolume(0.8) // distinct → ships
+    flushRaf()
+    const volCalls = calls.filter((c) => c.cmd === 'set_volume')
+    expect(volCalls).toHaveLength(1)
+    expect(volCalls[0].args).toEqual({ deck: 0, gain: 0.8 })
+  })
+
+  it('discrete commands are never coalesced — each fires immediately', async () => {
+    const { ch } = await deckA()
+    ch.setOnAir(false)
+    ch.setOnAir(true)
+    ch.setCue(true)
+    // No frame flush — they must already be on the wire.
+    expect(calls).toEqual([
+      { cmd: 'set_on_air', args: { deck: 0, on: false } },
+      { cmd: 'set_on_air', args: { deck: 0, on: true } },
+      { cmd: 'set_cue', args: { deck: 0, on: true } },
+    ])
   })
 })
 
@@ -229,6 +322,7 @@ describe('createNativeEngine — graceful native stubs', () => {
     await expect(engine.resume()).resolves.toBeUndefined()
     calls.length = 0
     engine.setCueMix(0.3)
+    flushRaf() // set_cue_mix is coalesced per frame
     expect(calls).toContainEqual({ cmd: 'set_cue_mix', args: { position: 0.3 } })
   })
 })

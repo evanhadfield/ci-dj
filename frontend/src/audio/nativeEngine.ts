@@ -75,13 +75,6 @@ export function invoke<T = void>(cmd: string, args?: unknown, options?: unknown)
   return g.core.invoke<T>(cmd, args, options)
 }
 
-/** Fire-and-forget control: a swallowed-rejection `invoke` for the many `void`
- * setters (a dropped control command must never surface as an unhandled
- * rejection). */
-function send(cmd: string, args?: unknown): void {
-  void invoke(cmd, args).catch(() => {})
-}
-
 const DECK_INDEX: Record<DeckId, number> = { a: 0, b: 1 }
 
 /** Map the TS `FxKind` (snake) to the Rust `FxKindArg` (camel, serde). */
@@ -187,6 +180,70 @@ export function createNativeEngine(): AudioEngine {
   let lastStatsAt = 0
   const STATS_INTERVAL_MS = 100 // ~10 Hz, matching the worklet's stat cadence
 
+  // --- Per-frame IPC coalescing for high-rate continuous setters ---
+  //
+  // A fast EQ/fader/filter sweep (pointermove, or the doubled 14-bit FLX4 CCs at
+  // ~200-600/s) fires one control command per event. These setters are all
+  // idempotent absolute "last-write-wins" sets, so only the latest value per
+  // target in a frame matters. We collapse them to ~one invoke per key per
+  // animation frame: `coalesce(key, cmd, args)` overwrites the pending entry and
+  // schedules a single rAF flush; `flushPending` ships them. Discrete/stateful
+  // commands stay immediate and FIRST flush the pending map, so a coalesced
+  // value can never leapfrog an ordering-dependent command (e.g. a pending
+  // set_fx_amount must land before a set_fx kind-change that resets amount).
+  // Purely an IPC reduction — the Rust engine is glitch-free regardless — so it
+  // changes no observable behaviour beyond dropping redundant writes.
+  type PendingWrite = { cmd: string; args: unknown; fingerprint: string }
+  const pending = new Map<string, PendingWrite>()
+  // The value last actually shipped per key (written in flushPending, never at
+  // queue time) — lets us drop a coalesced write that re-sends an already-applied
+  // value (an idempotent absolute set). Safe because every coalesced key is
+  // written ONLY through this path, so lastFlushed never drifts from the engine —
+  // with one exception that stays consistent: `set_fx` resets the engine's
+  // fx_amount to the kind's rest, and `useDeck.setFx` immediately re-applies
+  // `setFxAmount(rest)` (the same rest), so after a kind change the engine, the
+  // re-applied value, and lastFlushed all agree. Keep that re-apply if you touch
+  // the fx kind-change flow.
+  const lastFlushed = new Map<string, string>()
+  let flushScheduled = false
+
+  function flushPending() {
+    flushScheduled = false
+    if (pending.size === 0) return
+    const due = [...pending.entries()]
+    pending.clear()
+    for (const [key, { cmd, args, fingerprint }] of due) {
+      lastFlushed.set(key, fingerprint)
+      void invoke(cmd, args).catch(() => {})
+    }
+  }
+
+  /** Queue a continuous absolute setter, overwriting any pending value for the
+   * same key, and schedule a single flush for the next frame. A value that
+   * equals the one last shipped for this key is dropped (idempotent set). */
+  function coalesce(key: string, cmd: string, args: unknown) {
+    const fingerprint = JSON.stringify(args)
+    if (lastFlushed.get(key) === fingerprint) {
+      // Already the live value; drop any stale pending entry for this key.
+      pending.delete(key)
+      return
+    }
+    pending.set(key, { cmd, args, fingerprint })
+    if (!flushScheduled) {
+      flushScheduled = true
+      requestAnimationFrame(flushPending)
+    }
+  }
+
+  /** Immediate (non-coalesced) fire-and-forget control for the many `void`
+   * setters: first flush every pending coalesced write so this discrete command
+   * can never be overtaken, then `invoke` with the rejection swallowed (a dropped
+   * control command must never surface as an unhandled rejection). */
+  function send(cmd: string, args?: unknown): void {
+    flushPending()
+    void invoke(cmd, args).catch(() => {})
+  }
+
   function deckTrackStatus(deck: number) {
     const dto = snapshot?.tracks[deck]
     if (!dto) return null
@@ -267,16 +324,19 @@ export function createNativeEngine(): AudioEngine {
       // The realtime ring is cleared by the worker/sidecar lifecycle (part 4);
       // no engine-side reset command in the native path.
       reset: () => {},
-      setVolume: (volume) => send('set_volume', { deck, gain: volume }),
-      setEq: (band, value) => send('set_eq', { deck, band, value }),
+      setVolume: (volume) =>
+        coalesce(`set_volume:${deck}`, 'set_volume', { deck, gain: volume }),
+      setEq: (band, value) =>
+        coalesce(`set_eq:${deck}:${band}`, 'set_eq', { deck, band, value }),
       setCue: (on) => send('set_cue', { deck, on }),
       setFx: (kind) =>
         kind === null ? send('clear_fx', { deck }) : send('set_fx', { deck, kind: FX_ARG[kind] }),
-      setFxAmount: (amount) => send('set_fx_amount', { deck, amount }),
+      setFxAmount: (amount) =>
+        coalesce(`set_fx_amount:${deck}`, 'set_fx_amount', { deck, amount }),
       // Synced dub echo (M14) is a documented parity follow-up.
       setBeatPeriod: () => {},
       setOnAir: (on) => send('set_on_air', { deck, on }),
-      setTrim: (db) => send('set_trim', { deck, db }),
+      setTrim: (db) => coalesce(`set_trim:${deck}`, 'set_trim', { deck, db }),
       captureLoop: async (slot, seconds) => {
         await invoke('capture_loop', { deck, slot, seconds })
         return awaitSlotFilled(deck, slot)
@@ -344,6 +404,8 @@ export function createNativeEngine(): AudioEngine {
       },
       getLevel: () => snapshot?.health.deckLevels[deck] ?? 0,
       dispose: () => {
+        // Ship any queued writes so the last swept value isn't lost on teardown.
+        flushPending()
         decoded[deck] = null
         statsHandlers[deck] = null
       },
@@ -372,8 +434,8 @@ export function createNativeEngine(): AudioEngine {
     },
     // Audio is always running in the native engine — no Web Audio resume gesture.
     resume: () => Promise.resolve(),
-    setCrossfade: (position) => send('set_crossfade', { position }),
-    setCueMix: (position) => send('set_cue_mix', { position }),
+    setCrossfade: (position) => coalesce('set_crossfade', 'set_crossfade', { position }),
+    setCueMix: (position) => coalesce('set_cue_mix', 'set_cue_mix', { position }),
     getMasterLevel: () => snapshot?.health.masterPeak ?? 0,
     getMasterGainReduction: () => snapshot?.health.masterGainReductionDb ?? 0,
     // The engine taps the master bus on its render thread; stop returns a WAV.
