@@ -112,8 +112,8 @@ describe('DeckColumn', () => {
     expect(stat).toHaveClass('ui-stat--danger')
   })
 
-  it('disables transport until the deck is connected', () => {
-    renderPanel({ connection: 'closed' })
+  it('disables transport while the worker is dead', () => {
+    renderPanel({ connection: 'open', workerDied: true })
     expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled()
   })
 
@@ -1057,7 +1057,7 @@ describe('DeckColumn', () => {
   })
 
   it('disables the loop slots while the deck cannot take them', () => {
-    renderPanel({ connection: 'closed' })
+    renderPanel({ connection: 'open', switchingModel: true })
     expect(
       screen.getByRole('button', { name: 'Loop slot 1' }),
     ).toBeDisabled()

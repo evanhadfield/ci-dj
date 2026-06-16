@@ -169,7 +169,6 @@
     "status": {
       "connecting": "Connecting…",
       "connected": "Connected",
-      "disconnected": "Disconnected — retrying",
       "loadingModel": "Loading model…",
       "primed": "Primed — off air",
       "frozen": "Frozen — looping",

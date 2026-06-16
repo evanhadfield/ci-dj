@@ -278,11 +278,9 @@ export function DeckColumn({
       ? 'deck.status.frozen'
       : primed && connected
         ? 'deck.status.primed'
-        : {
-            connecting: 'deck.status.connecting',
-            open: 'deck.status.connected',
-            closed: 'deck.status.disconnected',
-          }[state.connection]
+        : state.connection === 'open'
+          ? 'deck.status.connected'
+          : 'deck.status.connecting'
   const bufferFraction = state.bufferedSeconds / BUFFER_TARGET_SECONDS
   const bufferTone =
     !state.playing || bufferFraction >= 0.5 ? 'ok' : bufferFraction >= 0.25 ? 'warn' : 'danger'

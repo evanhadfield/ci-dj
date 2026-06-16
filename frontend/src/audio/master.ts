@@ -1,7 +1,8 @@
 /** Master housekeeping (M17): the pure math behind the limiter's
- * ceiling and the per-deck auto-gain. The graph side lives in
- * engine.ts; the loudness feed comes from the deck wire chunks (the
- * same main-thread tap the beat tracker uses, ADR-0010).
+ * ceiling and the per-deck auto-gain. The graph side lives in the
+ * native Rust engine (`src-tauri/engine/src/graph.rs`); the loudness
+ * feed comes from the deck PCM chunks (the same main-thread tap the
+ * beat tracker uses, ADR-0010).
  *
  * The limiter is a DynamicsCompressorNode doing the musical work plus
  * a WaveShaper clip guard doing the mathematical work: the compressor

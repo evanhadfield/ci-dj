@@ -492,3 +492,56 @@ impl MixGraph {
         self.limiter.reset();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The equal-power crossfade law `set_crossfade` recomputes: the two deck
+    /// gains hold CONSTANT POWER (`a² + b² ≈ 1`) across the whole sweep — no dip
+    /// or bump through the centre. This is the invariant the deleted Web Audio
+    /// `engine.test.ts` `equalPowerGains` test guarded; it now lives only here.
+    #[test]
+    fn crossfade_holds_constant_power_across_the_sweep() {
+        let mut graph = MixGraph::new();
+        for &position in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+            graph.set_crossfade(position);
+            let power = graph.gains[0] * graph.gains[0] + graph.gains[1] * graph.gains[1];
+            assert!(
+                (power - 1.0).abs() < 1e-6,
+                "constant power at p={position}: a²+b²={power} (gains {:?})",
+                graph.gains,
+            );
+        }
+    }
+
+    /// Out-of-range positions clamp to the endpoints rather than running the
+    /// trig past `[0, 1]` (which would overshoot the equal-power law).
+    #[test]
+    fn crossfade_clamps_out_of_range_positions() {
+        let mut graph = MixGraph::new();
+        graph.set_crossfade(0.0);
+        let at_zero = graph.gains;
+        graph.set_crossfade(-1.0);
+        assert_eq!(graph.gains, at_zero, "negative position clamps to 0.0");
+
+        graph.set_crossfade(1.0);
+        let at_one = graph.gains;
+        graph.set_crossfade(2.0);
+        assert_eq!(graph.gains, at_one, "position past 1.0 clamps to 1.0");
+    }
+
+    /// The endpoints hand the mix wholly to one deck: full deck A at p=0
+    /// (a≈1, b≈0), full deck B at p=1 (reversed).
+    #[test]
+    fn crossfade_endpoints_favour_one_deck() {
+        let mut graph = MixGraph::new();
+        graph.set_crossfade(0.0);
+        assert!((graph.gains[0] - 1.0).abs() < 1e-6, "deck A full at p=0");
+        assert!(graph.gains[1].abs() < 1e-6, "deck B silent at p=0");
+
+        graph.set_crossfade(1.0);
+        assert!(graph.gains[0].abs() < 1e-6, "deck A silent at p=1");
+        assert!((graph.gains[1] - 1.0).abs() < 1e-6, "deck B full at p=1");
+    }
+}

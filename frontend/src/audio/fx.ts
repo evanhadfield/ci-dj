@@ -2,7 +2,8 @@
  * `amount → parameters` function over the one-knob convention — a rest
  * position (centre for the bipolar filter, zero otherwise) with a dead
  * zone around it where the insert is bit-transparently bypassed. The
- * graph builders in engine.ts only apply what these curves compute. */
+ * native FX insert (`src-tauri/engine/src/fx.rs`) only applies what
+ * these curves compute. */
 
 export type FxKind = 'filter' | 'dub_echo' | 'space' | 'crush' | 'noise' | 'sweep'
 

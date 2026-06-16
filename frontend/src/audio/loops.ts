@@ -1,7 +1,8 @@
 /** Freeze-pad loop math (M13, ADR-0009): pure functions and constants
  * for capturing the just-played tail of a deck and looping it
- * seamlessly. The audio-graph side lives in engine.ts; the worklet-side
- * history bookkeeping in public/loop-capture-kernel.js. */
+ * seamlessly. The audio-graph side lives in the native Rust engine
+ * (`src-tauri/engine/src/loops.rs`); the played-history bookkeeping the
+ * capture reads from is `PlayedHistory` in `src-tauri/engine/src/ring.rs`. */
 
 export const LOOP_SLOT_COUNT = 4
 

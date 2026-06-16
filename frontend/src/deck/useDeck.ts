@@ -254,8 +254,10 @@ export type DeckControls = {
   getChannelLevel: () => number
 }
 
-/** Owns one deck's WebSocket and its channel on the shared audio engine
- * (worklet ring buffer → deck gain → crossfade bus, see audio/engine.ts). */
+/** Owns one deck's native sidecar transport (control over IPC `deck_*`
+ * commands, status over `sidecar://status`) and its channel on the shared
+ * audio engine — the ring buffer → deck gain → crossfade bus now lives in
+ * the native Rust engine (`src-tauri/engine/src/graph.rs`). */
 export function useDeck(deckId: DeckId): DeckControls {
   const engine = useAudioEngine()
   const [state, dispatch] = useReducer(deckReducer, initialDeckState)

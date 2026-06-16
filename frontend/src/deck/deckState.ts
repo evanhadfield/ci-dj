@@ -3,18 +3,6 @@
  * health (buffer level, underruns) is always visible, never inferred. */
 
 export type ServerEvent =
-  | {
-      event: 'hello'
-      deck: string
-      model: string
-      sample_rate: number
-      channels: number
-      chunk_seconds: number
-      models: string[]
-      restarting: boolean
-      total_ram_gb: number
-      model_ram_estimate_gb: Record<string, number>
-    }
   | { event: 'ready'; deck: string; model: string }
   | { event: 'chunk'; index: number; rtf: number | null }
   | {
@@ -47,9 +35,7 @@ export type ActiveStyle = {
 }
 
 export type DeckAction =
-  | { type: 'socket_connecting' }
   | { type: 'socket_open' }
-  | { type: 'socket_closed' }
   | { type: 'server_event'; event: ServerEvent }
   | { type: 'worklet_stats'; stats: WorkletStats }
   | { type: 'play_requested' }
@@ -61,7 +47,7 @@ export type DeckAction =
   | { type: 'deck_info'; models: string[]; ramInfo: RamInfo }
 
 export type DeckState = {
-  connection: 'connecting' | 'open' | 'closed'
+  connection: 'connecting' | 'open'
   model: string | null
   availableModels: string[]
   ramInfo: RamInfo | null
@@ -105,12 +91,8 @@ export const initialDeckState: DeckState = {
 
 export function deckReducer(state: DeckState, action: DeckAction): DeckState {
   switch (action.type) {
-    case 'socket_connecting':
-      return { ...state, connection: 'connecting' }
     case 'socket_open':
       return { ...state, connection: 'open', error: null }
-    case 'socket_closed':
-      return { ...state, connection: 'closed', playing: false, audible: false }
     case 'play_requested':
       return { ...state, playing: true }
     case 'stop_requested':
@@ -133,24 +115,6 @@ export function deckReducer(state: DeckState, action: DeckAction): DeckState {
 
 function applyServerEvent(state: DeckState, event: ServerEvent): DeckState {
   switch (event.event) {
-    case 'hello':
-      // hello is authoritative for the switch flag: a reconnect can land
-      // after a switch finished (its ready event drained with the old
-      // session), and the stale flag would otherwise lock the deck forever.
-      return {
-        ...state,
-        model: event.model,
-        availableModels: event.models,
-        switchingModel: event.restarting,
-        // A new session can be talking to a brand-new worker (backend
-        // restart); dropping the stale style lets the re-apply effect
-        // restore the arrangement either way.
-        activeStyle: null,
-        ramInfo: {
-          totalGb: event.total_ram_gb,
-          estimateGbByModel: event.model_ram_estimate_gb,
-        },
-      }
     case 'ready':
       // A fresh worker finished loading — after startup, a model switch, or
       // a crash restart. It has no prompt and is not streaming.

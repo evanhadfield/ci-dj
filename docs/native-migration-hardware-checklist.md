@@ -117,7 +117,9 @@ status arrives as `sidecar://status` events (`useDeck` selects this with
         an engine-side realtime-ring reset), so a brief old-model tail can play.
   - [x] The sa3 pad/track HTTP generation path (`/api/render`, `/api/generate`)
         rehosted for the native app. — done: the Rust shell spawns the FastAPI
-        controller `--generation-only` on a loopback port (`generation.rs`), the
+        controller (generation-only by construction — it spawns no deck workers)
+        on a loopback port via `python -m slipmate.controller --port N`
+        (`generation.rs`), the
         webview fetches it via `getApiBaseUrl()` (CORS on; CSP left null/permissive
         — tightening is a security follow-up). On the live stack, verify:
     - [ ] Pad generation (Magenta `/api/render`) and track generation (sa3

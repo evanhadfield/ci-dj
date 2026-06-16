@@ -40,14 +40,20 @@ def _total_ram_gb() -> float:
 
 
 @contextlib.asynccontextmanager
-async def _deck_lifespan(_: FastAPI):
+async def _render_lifespan(_: FastAPI):
+    """App lifespan: only the render worker has a lifecycle here.
+
+    The decks moved to the Rust sidecars in the native cutover, so the
+    controller spawns none — this just tears down the lazily-spawned
+    render worker on shutdown.
+    """
     yield
     if render_state["worker"] is not None:
         render_state["worker"].shutdown()
         render_state["worker"] = None
 
 
-app = FastAPI(lifespan=_deck_lifespan)
+app = FastAPI(lifespan=_render_lifespan)
 
 
 # Worst case: a 32 s clip at a pessimistic ~1× real time, plus a cold

@@ -11,10 +11,31 @@ import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AudioEngineProvider } from '../audio/AudioEngineProvider'
+import * as beatModule from '../audio/beat'
 import { updateDeckSettings } from '../persistence'
 import { clickTrack } from '../test/clickTrack'
 import type { AudioEngine, DeckChannel } from '../audio/types'
 import { useDeck } from './useDeck'
+
+/** Wrap useDeck's beat tracker so a test can watch what reaches the live
+ * analysis: spy on the factory, return the real tracker, and record every
+ * `push`. The deck feeds the tracker only on the live (non-parked) PCM path,
+ * so this is the direct observable for the parked-straggler guard. Install
+ * before rendering the deck — the tracker is built at mount. */
+function spyOnTrackerPush() {
+  const realCreate = beatModule.createBeatTracker
+  const push = vi.fn()
+  vi.spyOn(beatModule, 'createBeatTracker').mockImplementation((sampleRate) => {
+    const tracker = realCreate(sampleRate)
+    const realPush = tracker.push
+    tracker.push = (samples) => {
+      push(samples)
+      realPush(samples)
+    }
+    return tracker
+  })
+  return push
+}
 
 /** The captured native transport: the latest `sidecar://status` callback, the
  * latest PCM `Channel` instance, and the `core.invoke` spy recording every
@@ -158,6 +179,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.useRealTimers()
+  // Restore any vi.spyOn factories (e.g. the beat-tracker push spy) so they
+  // never leak into the next test's real tracker.
+  vi.restoreAllMocks()
 })
 
 /** The recorded native deck CONTROL commands in order — the native analogue of
@@ -977,10 +1001,37 @@ describe('useDeck playback mode (M19)', () => {
     expect(channel.captureSample).not.toHaveBeenCalled()
   })
 
-  it('drops a straggler PCM chunk while parked', async () => {
-    const { channel } = await loadedDeck()
+  it('drops a straggler PCM chunk while parked — the analysis never sees it', async () => {
+    // A parked (playback) deck must NOT feed a late model chunk into the beat
+    // tracker, or the straggler would pollute the track's clock. The guard in
+    // useDeck's PCM callback (`if mode === 'playback' return`) is the only thing
+    // stopping it — `result.current.bpm` is double-gated by the per-tick
+    // playback guard and so cannot observe this, but the tracker push can.
+    const trackerPush = spyOnTrackerPush()
+    const { engine, channel } = makeFakeEngine()
+    const rendered = renderDeck(engine)
+    act(() => socket(0).serverOpen())
+    await act(async () => {
+      await rendered.result.current.loadTrack(new ArrayBuffer(8), 'Test Pressing')
+    })
+    expect(channel.loadTrack).toHaveBeenCalled()
+
     act(() => feedPcm(new ArrayBuffer(16)))
-    expect(channel.postPcm).not.toHaveBeenCalled()
+    expect(trackerPush).not.toHaveBeenCalled()
+  })
+
+  it('a live (non-parked) deck DOES feed fed PCM into the analysis', async () => {
+    // The positive counterpart: the same feed on a realtime, playing deck
+    // reaches the beat tracker, so the parked test above guards a real,
+    // exercised path rather than asserting on dead code.
+    const trackerPush = spyOnTrackerPush()
+    const { engine } = makeFakeEngine()
+    const { result } = renderDeck(engine)
+    act(() => socket(0).serverOpen())
+    await act(() => result.current.play())
+
+    act(() => feedPcm(new ArrayBuffer(16)))
+    expect(trackerPush).toHaveBeenCalled()
   })
 
   it('follows the channel playhead while a track is loaded', async () => {
@@ -1176,6 +1227,58 @@ describe('useDeck beat clocks (M20)', () => {
       }),
     )
     expect(result.current.getLiveBeat()).not.toBeNull()
+  })
+
+  it('subtracts the native global render origin so the beat lands on the lattice', async () => {
+    // The native engine reports a GLOBAL, never-reset render count, while the
+    // beat tracker's anchorFrame resets to 0 with the stream (ADR-0014). useDeck
+    // captures getContextTime()·SR at each stream reset and subtracts it so the
+    // two share a frame domain. The rest of the M20 suite runs getContextTime
+    // () => 0, leaving that origin at 0 and the subtraction unexercised; here it
+    // is non-zero, so the subtraction carries weight and a dropped/wrong-sign
+    // origin would push the reported beat off the click lattice.
+    const ORIGIN_SECONDS = 5 // 5 s = 10.666… periods at 128 BPM: NOT a whole beat
+    const ORIGIN_FRAMES = ORIGIN_SECONDS * 48_000
+    const { engine, captured } = makeFakeEngine({
+      getContextTime: vi.fn(() => ORIGIN_SECONDS),
+    })
+    const { result } = renderDeck(engine)
+    act(() => socket(0).serverOpen())
+    // play() anchors playedFramesOriginRef at getContextTime()·SR = ORIGIN_FRAMES.
+    await act(() => result.current.play())
+
+    const { samples } = clickChannels(128, 14)
+    const frameStride = 48_000 * 2
+    for (let second = 0; second < 14; second++) {
+      const chunk = samples.slice(second * frameStride, (second + 1) * frameStride)
+      act(() => feedPcm(chunk.buffer))
+      act(() => void vi.advanceTimersByTime(1_000))
+    }
+    expect(result.current.bpm).not.toBeNull()
+
+    // playedFrames is in the GLOBAL render domain: the per-stream position
+    // (10 s) plus the never-reset origin.
+    const perStreamPlayed = 10 * 48_000
+    act(() =>
+      captured.onStats?.({
+        underruns: 0,
+        bufferedSeconds: 2,
+        playing: true,
+        playedFrames: ORIGIN_FRAMES + perStreamPlayed,
+        contextTime: 100,
+      }),
+    )
+    const clock = result.current.getLiveBeat()
+    expect(clock).not.toBeNull()
+    expect(clock!.periodSeconds).toBeCloseTo(60 / 128, 2)
+    // Reconstruct the played position in the per-stream domain (subtract the
+    // origin ourselves) and assert the beat sits on the lattice. If production
+    // dropped the origin subtraction, beatAtContext would be off by
+    // ORIGIN_FRAMES — 10.666… periods — pushing the gap well past 0.15.
+    const beatsFromStart =
+      ((clock!.beatAtContext - 100) * 48_000 + perStreamPlayed) / 48_000 / (60 / 128)
+    const gap = Math.abs(beatsFromStart - Math.round(beatsFromStart))
+    expect(gap).toBeLessThanOrEqual(0.15)
   })
 
   it('derives the track beat clock from the grid, rate-aware', async () => {
