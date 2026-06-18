@@ -347,8 +347,14 @@ export function createNativeEngine(): AudioEngine {
         const left = buf.getChannelData(0)
         const right = buf.numberOfChannels > 1 ? buf.getChannelData(1) : left
         const pcm = interleaveChannels(left, right)
-        await invoke('load_generated_loop', framePayload([deck, slot, oneShot ? 1 : 0], pcm))
-        return awaitSlotFilled(deck, slot)
+        // The engine reports whether it accepted the pad (false off Realtime, or a
+        // loop too short to install). Trust that verdict rather than polling the
+        // slot — a poll can't tell a slow install from a silent refusal, which is
+        // what surfaced as a phantom "could not be decoded" on an idle deck.
+        return invoke<boolean>(
+          'load_generated_loop',
+          framePayload([deck, slot, oneShot ? 1 : 0], pcm),
+        )
       },
       // Synchronous boolean from the cached slot state (false iff empty — exactly
       // the engine's own false condition).
