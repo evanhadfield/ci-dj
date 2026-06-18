@@ -1253,8 +1253,10 @@ export function useDeck(deckId: DeckId): DeckControls {
           }
           const wav = await response.arrayBuffer()
           if (stale()) return
+          // The engine reports whether it took the pad; a refusal (a deck that
+          // isn't a live/Realtime deck) is honestly named, not blamed on decoding.
           if (!(await channel.loadGeneratedLoop(slot, wav, oneShot))) {
-            throw new Error('generated audio could not be decoded')
+            throw new Error('the deck could not load the generated pad')
           }
           // A clear landing mid-decode wins: the slot stays empty in the
           // UI and the channel's orphaned buffer waits for the next

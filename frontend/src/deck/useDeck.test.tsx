@@ -886,16 +886,17 @@ describe('useDeck generated pads', () => {
     expect(result.current.generateError).toBeNull()
   })
 
-  it('an undecodable body is a failure, not a filled slot', async () => {
+  it('a refused load is a failure, not a filled slot', async () => {
     stubFetchOk()
     const { engine, channel } = makeFakeEngine()
+    // The engine declines the pad (false) — e.g. the deck is not Realtime.
     vi.mocked(channel.loadGeneratedLoop).mockResolvedValue(false)
     const { result } = await playingDeck(engine)
 
     act(() => result.current.generateToPad('riser', 'sfx', true))
     await act(async () => {})
     expect(result.current.loop.slots[0].state).toBe('empty')
-    expect(result.current.generateError).toMatch(/decoded/)
+    expect(result.current.generateError).toMatch(/could not load the generated pad/)
   })
 
   it('does nothing without an empty slot or a prompt', async () => {

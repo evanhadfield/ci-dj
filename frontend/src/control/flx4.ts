@@ -11,6 +11,16 @@
 import type { DeckId } from '../audio/types'
 import { LOOP_SLOT_COUNT } from '../audio/loops'
 import type { ControlIntent } from './bus'
+import type { ControllerDriver, ControllerLeds } from './driver'
+
+/** Makes the FLX4 dump every analog control's current position as ordinary
+ * CC traffic — knobs are silent until moved, so this is how a fresh
+ * connection syncs to the hardware. From the Mixxx FLX4 script ("query the
+ * controller for current control positions on startup"); reverse-engineered
+ * there with Wireshark, doubles as its keep-alive. */
+export const FLX4_STATUS_QUERY = [
+  0xf0, 0x00, 0x40, 0x05, 0x00, 0x00, 0x04, 0x05, 0x00, 0x50, 0x02, 0xf7,
+]
 
 /** Per-deck Note On status bytes, shared with the cue LEDs. */
 export const NOTE_ON_STATUS_BY_DECK: Record<DeckId, number> = {
@@ -295,4 +305,47 @@ export function createFlx4Translator(): Flx4Translator {
     if (value === 0) return null
     return buttonIntent(status, number, shiftHeld)
   }
+}
+
+/** Pioneer buttons/pads light by echoing their own status/note back as MIDI
+ * out, velocity 0x7F on / 0x00 off (docs/midi-ddj-flx4.md). */
+function echo(status: number, note: number, on: boolean): number[] {
+  return [status, note, on ? 0x7f : 0x00]
+}
+
+/** The FLX4 LED scheme (ControllerLeds): each op repaints the whole group it
+ * owns, byte-for-byte as the app sent before the driver registry. */
+export const flx4Leds: ControllerLeds = {
+  styleTargetPads: (deck, count) =>
+    Array.from({ length: PAD_COUNT }, (_, pad) =>
+      echo(PAD_STATUS_BY_DECK[deck], pad, pad < count),
+    ),
+  fxPads: (deck, activeIndex) =>
+    Array.from({ length: PAD_COUNT }, (_, pad) =>
+      echo(PAD_STATUS_BY_DECK[deck], PAD_FX_NOTE_BASE + pad, pad === activeIndex),
+    ),
+  loopPads: (deck, filled) =>
+    Array.from({ length: PAD_COUNT }, (_, pad) =>
+      echo(PAD_STATUS_BY_DECK[deck], LOOP_NOTE_BASE + pad, Boolean(filled[pad])),
+    ),
+  cuePads: (deck, filled) =>
+    Array.from({ length: PAD_COUNT }, (_, pad) =>
+      echo(PAD_STATUS_BY_DECK[deck], pad, Boolean(filled[pad])),
+    ),
+  channelCue: (deck, on) => [
+    echo(NOTE_ON_STATUS_BY_DECK[deck], CHANNEL_CUE_NOTE, on),
+  ],
+  transportCue: (deck, on) => [
+    echo(NOTE_ON_STATUS_BY_DECK[deck], TRANSPORT_CUE_NOTE, on),
+  ],
+}
+
+export const flx4Driver: ControllerDriver = {
+  id: 'flx4',
+  label: 'Pioneer DDJ-FLX4',
+  nameFragment: 'DDJ-FLX4',
+  initSysex: FLX4_STATUS_QUERY,
+  createTranslator: createFlx4Translator,
+  isPadModeSwitch,
+  leds: flx4Leds,
 }

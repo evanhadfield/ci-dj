@@ -597,7 +597,7 @@ pub fn clear_loop(state: tauri::State<'_, Host>, deck: usize, slot: usize) {
 pub fn load_generated_loop(
     state: tauri::State<'_, Host>,
     request: tauri::ipc::Request<'_>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let payload = raw_payload(&request)?;
     let (Some(deck), Some(slot), Some(one_shot)) = (
         read_u32_le(payload, 0).map(|d| d as usize),
@@ -606,10 +606,13 @@ pub fn load_generated_loop(
     ) else {
         return Err("load_generated_loop payload too short".to_string());
     };
+    // The engine's verdict (accepted / refused) flows back to the webview so a
+    // refusal surfaces honestly instead of as a phantom "could not be decoded".
     if valid_deck(deck) && valid_slot(slot) {
-        state.load_generated_loop(deck, slot, pcm_from_le_bytes(&payload[12..]), one_shot);
+        Ok(state.load_generated_loop(deck, slot, pcm_from_le_bytes(&payload[12..]), one_shot))
+    } else {
+        Ok(false)
     }
-    Ok(())
 }
 
 /// Capture the last `seconds` of played history on a Realtime deck (M15 style

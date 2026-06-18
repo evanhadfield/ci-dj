@@ -133,16 +133,54 @@ describe('useMidi pad LEDs', () => {
     expect(result.current.ledEpoch).toBe(before + 1)
   })
 
-  it('echoes single-button LEDs with on/off velocities', async () => {
+  it('bumps the LED epoch when the bound controller switches', async () => {
+    const send = vi.fn()
+    const access = {
+      inputs: new Map([
+        ['in-0', { name: 'DDJ-FLX4 MIDI 1', onmidimessage: null }],
+        ['in-1', { name: 'DDJ-400 MIDI 1', onmidimessage: null }],
+      ]),
+      outputs: new Map([
+        ['out-0', { name: 'DDJ-FLX4 MIDI 1', send }],
+        ['out-1', { name: 'DDJ-400 MIDI 1', send }],
+      ]),
+      onstatechange: null,
+      sysexEnabled: true,
+    }
+    Object.defineProperty(navigator, 'requestMIDIAccess', {
+      configurable: true,
+      value: vi.fn(() => Promise.resolve(access)),
+    })
+    const { result } = renderHook(() => useMidi(), { wrapper })
+    act(() => result.current.connect())
+    // First match by registry order (the FLX4) binds; the initial paint rides
+    // the status change, so the epoch hasn't bumped yet.
+    await waitFor(() =>
+      expect(result.current.deviceName).toBe('DDJ-FLX4 MIDI 1'),
+    )
+    // The first connect repaints via the status change, not the epoch.
+    const before = result.current.ledEpoch
+    expect(before).toBe(0)
+
+    // Picking the other controller re-binds with the status still 'connected' —
+    // the epoch must bump so the newly-bound device repaints.
+    act(() => result.current.selectDevice('DDJ-400 MIDI 1'))
+    expect(result.current.deviceName).toBe('DDJ-400 MIDI 1')
+    expect(result.current.ledEpoch).toBe(before + 1)
+  })
+
+  it('echoes the cue button LEDs through the active driver', async () => {
     const send = vi.fn()
     stubMidiAccess(send)
     const { result } = renderHook(() => useMidi(), { wrapper })
     act(() => result.current.connect())
     await waitFor(() => expect(result.current.status).toBe('connected'))
 
-    result.current.setLed(0x90, 0x54, true)
+    // App speaks deck + on/off; the FLX4 driver maps to the channel-cue
+    // (0x54) and transport-cue (0x0C) bytes, velocity on/off.
+    result.current.setChannelCueLed('a', true)
     expect(send).toHaveBeenLastCalledWith([0x90, 0x54, 0x7f])
-    result.current.setLed(0x91, 0x0c, false)
+    result.current.setTransportCueLed('b', false)
     expect(send).toHaveBeenLastCalledWith([0x91, 0x0c, 0x00])
   })
 })

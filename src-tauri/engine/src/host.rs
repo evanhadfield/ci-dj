@@ -202,7 +202,12 @@ enum Command {
     StopLoop(usize),
     StopOneShot(usize),
     ClearLoop(usize, usize),
-    LoadGeneratedLoop(usize, usize, Vec<f32>, bool),
+    /// Load a decoded pad/loop into a slot; whether the engine accepted it
+    /// (`false` off Realtime, or a loop too short to install) is sent back over
+    /// the reply channel so the caller learns the real verdict instead of
+    /// polling the slot — a refusal is otherwise silent. The `Vec` is built off
+    /// the render thread; the caller parks on the receiver, like `CaptureSample`.
+    LoadGeneratedLoop(usize, usize, Vec<f32>, bool, Producer<bool>),
     /// Capture played history; the result (`Some(samples)` / `None`) is sent back
     /// over the enclosed reply channel. Built on the render thread (it allocates)
     /// and shipped to the caller, which is parked on the receiver.
@@ -578,9 +583,32 @@ impl Host {
 
     /// Load a decoded loop/pad into a slot. Like [`Host::load_track`], `samples`
     /// is moved into the command and installed (and any old buffer dropped) on the
-    /// render thread.
-    pub fn load_generated_loop(&self, deck: usize, slot: usize, samples: Vec<f32>, one_shot: bool) {
-        self.send(Command::LoadGeneratedLoop(deck, slot, samples, one_shot));
+    /// render thread. Round-trips a reply (the `capture_sample` pattern) so the
+    /// caller gets the engine's actual verdict — `true` accepted, `false` refused
+    /// (off Realtime, or a loop too short to install) or the render thread is gone
+    /// — rather than inferring success by polling the slot, which cannot tell a
+    /// slow install from a silent refusal.
+    pub fn load_generated_loop(
+        &self,
+        deck: usize,
+        slot: usize,
+        samples: Vec<f32>,
+        one_shot: bool,
+    ) -> bool {
+        let (reply_tx, mut reply_rx) = RingBuffer::<bool>::new(CAPTURE_REPLY_DEPTH);
+        if !self.send(Command::LoadGeneratedLoop(deck, slot, samples, one_shot, reply_tx)) {
+            return false;
+        }
+        // Park until the render thread answers — a rare, explicit user action, so a
+        // bounded spin-park keeps it off any RT path without a vanished render
+        // thread hanging the call.
+        for _ in 0..1000 {
+            match reply_rx.pop() {
+                Ok(accepted) => return accepted,
+                Err(_) => thread::sleep(Duration::from_millis(1)),
+            }
+        }
+        false
     }
 
     /// Capture the last `seconds` of played history on a Realtime deck (M15 style
@@ -786,8 +814,11 @@ impl RenderLoop {
             Command::StopLoop(d) => self.engine.stop_loop(d),
             Command::StopOneShot(d) => self.engine.stop_one_shot(d),
             Command::ClearLoop(d, slot) => self.engine.clear_loop(d, slot),
-            Command::LoadGeneratedLoop(d, slot, samples, one_shot) => {
-                self.engine.load_generated_loop(d, slot, samples, one_shot);
+            Command::LoadGeneratedLoop(d, slot, samples, one_shot, mut reply) => {
+                let accepted = self.engine.load_generated_loop(d, slot, samples, one_shot);
+                // The caller is parked on the receiver; a full/closed reply queue
+                // just means it gave up — drop the verdict silently.
+                let _ = reply.push(accepted);
             }
             Command::CaptureSample(d, secs, mut reply) => {
                 let captured = self.engine.capture_sample(d, secs);
@@ -1194,6 +1225,48 @@ mod tests {
         assert_eq!(health.deck_underruns, host.telemetry.underruns());
 
         drop(host); // joins the render thread cleanly
+    }
+
+    /// `load_generated_loop` round-trips the engine's verdict through the spawned
+    /// render thread: a one-shot pad onto a fresh (Realtime) deck is accepted and
+    /// fills the slot; the same load onto a Playback deck is refused. Before the
+    /// reply channel this was fire-and-forget — a refusal was silent and the
+    /// webview could only guess by polling, surfacing as a phantom decode failure.
+    #[test]
+    fn load_generated_loop_reports_its_verdict() {
+        let (host, _output, _cue_output, _handles) = Host::new();
+
+        // A fresh deck is Realtime: a one-shot pad is accepted and the slot fills.
+        let pad = vec![0.25f32; 4_800 * CHANNELS as usize]; // 0.1 s stereo
+        assert!(
+            host.load_generated_loop(0, 0, pad.clone(), true),
+            "a one-shot pad loads onto a Realtime deck",
+        );
+        let mut filled = false;
+        for _ in 0..200 {
+            if host.loop_slots(0)[0].filled {
+                filled = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(filled, "the accepted pad fills the slot in the snapshot");
+
+        // Switching the deck to Playback makes the same load refused — the verdict
+        // the webview now shows honestly instead of "could not be decoded".
+        host.load_track(0, ramp_track(10_000));
+        for _ in 0..200 {
+            if host.track_status(0).is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            !host.load_generated_loop(0, 1, pad, true),
+            "a Playback deck refuses a generated pad",
+        );
+
+        drop(host);
     }
 
     #[test]
