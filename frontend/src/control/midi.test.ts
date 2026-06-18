@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { createMidiLink, FLX4_STATUS_QUERY, type MidiStatus } from './midi'
+import { ddj400Driver } from './ddj400'
+import type { ControllerDriver } from './driver'
+import { flx4Driver, FLX4_STATUS_QUERY } from './flx4'
+import { createMidiLink, type MidiStatus } from './midi'
 
 type FakePort = {
   name: string
@@ -21,24 +24,33 @@ function fakeAccess(inputs: FakePort[], outputs: FakePort[] = []) {
   }
 }
 
-function createLink(access: ReturnType<typeof fakeAccess>) {
+function createLink(
+  access: ReturnType<typeof fakeAccess>,
+  drivers: ControllerDriver[] = [flx4Driver],
+) {
   const statuses: Array<[MidiStatus, string | null]> = []
+  const available: string[][] = []
   const onMessage = vi.fn()
   const requestAccess = vi.fn(() =>
     Promise.resolve(access as unknown as MIDIAccess),
   )
   const link = createMidiLink({
+    drivers,
     onMessage,
-    onStatus: (status, deviceName) => statuses.push([status, deviceName]),
+    onStatus: (status, active, devices) => {
+      statuses.push([status, active?.name ?? null])
+      available.push(devices.map((device) => device.name))
+    },
     requestAccess,
   })
-  return { link, statuses, onMessage, requestAccess }
+  return { link, statuses, available, onMessage, requestAccess }
 }
 
 describe('createMidiLink', () => {
   it('reports unsupported when Web MIDI is unavailable', async () => {
     const statuses: MidiStatus[] = []
     const link = createMidiLink({
+      drivers: [flx4Driver],
       onMessage: vi.fn(),
       onStatus: (status) => statuses.push(status),
     })
@@ -46,7 +58,7 @@ describe('createMidiLink', () => {
     expect(statuses).toEqual(['unsupported'])
   })
 
-  it('connects to an input whose name contains DDJ-FLX4', async () => {
+  it('connects to an input whose name matches a registered controller', async () => {
     const { link, statuses } = createLink(
       fakeAccess([fakePort('Some Keyboard'), fakePort('DDJ-FLX4 MIDI 1')]),
     )
@@ -68,7 +80,7 @@ describe('createMidiLink', () => {
     expect(onMessage).toHaveBeenCalledTimes(1)
   })
 
-  it('reports no-device when nothing matches', async () => {
+  it('reports no-device when nothing matches a registered controller', async () => {
     const { link, statuses } = createLink(fakeAccess([fakePort('Some Keyboard')]))
     await link.connect()
     expect(statuses.at(-1)).toEqual(['no-device', null])
@@ -77,6 +89,7 @@ describe('createMidiLink', () => {
   it('reports denied when the permission request rejects', async () => {
     const statuses: MidiStatus[] = []
     const link = createMidiLink({
+      drivers: [flx4Driver],
       onMessage: vi.fn(),
       onStatus: (status) => statuses.push(status),
       requestAccess: () => Promise.reject(new Error('NotAllowedError')),
@@ -167,6 +180,7 @@ describe('createMidiLink', () => {
     try {
       const statuses: MidiStatus[] = []
       const link = createMidiLink({
+        drivers: [flx4Driver],
         onMessage: vi.fn(),
         onStatus: (status) => statuses.push(status),
       })
@@ -202,5 +216,50 @@ describe('createMidiLink', () => {
     const { link } = createLink(fakeAccess([]))
     await link.connect()
     expect(() => link.send([0x97, 0x00, 0x7f])).not.toThrow()
+  })
+
+  describe('multiple controllers', () => {
+    const drivers = [flx4Driver, ddj400Driver]
+
+    it('binds the first match and lists every connected controller', async () => {
+      const { link, statuses, available } = createLink(
+        fakeAccess([fakePort('DDJ-400'), fakePort('DDJ-FLX4')]),
+        drivers,
+      )
+      await link.connect()
+      // First match by registry order — the FLX4 leads CONTROLLER_DRIVERS.
+      expect(statuses.at(-1)).toEqual(['connected', 'DDJ-FLX4'])
+      expect(available.at(-1)).toEqual(['DDJ-400', 'DDJ-FLX4'])
+    })
+
+    it('switches to a selected controller and sends its own SysEx', async () => {
+      const flx4Out = fakePort('DDJ-FLX4')
+      const ddj400Out = fakePort('DDJ-400')
+      const access = fakeAccess(
+        [fakePort('DDJ-FLX4'), fakePort('DDJ-400')],
+        [flx4Out, ddj400Out],
+      )
+      const { link, statuses } = createLink(access, drivers)
+      await link.connect()
+      expect(statuses.at(-1)).toEqual(['connected', 'DDJ-FLX4'])
+
+      ddj400Out.send.mockClear()
+      link.select('DDJ-400')
+      expect(statuses.at(-1)).toEqual(['connected', 'DDJ-400'])
+      // The DDJ-400's own position query goes to its output, not the FLX4's.
+      expect(ddj400Out.send).toHaveBeenCalledWith(ddj400Driver.initSysex)
+    })
+
+    it('keeps a chosen controller selected across a re-bind', async () => {
+      const access = fakeAccess([fakePort('DDJ-FLX4'), fakePort('DDJ-400')])
+      const { link, statuses } = createLink(access, drivers)
+      await link.connect()
+      link.select('DDJ-400')
+      expect(statuses.at(-1)).toEqual(['connected', 'DDJ-400'])
+
+      // A hot-plug statechange re-binds; the explicit choice survives.
+      access.onstatechange?.()
+      expect(statuses.at(-1)).toEqual(['connected', 'DDJ-400'])
+    })
   })
 })

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '../ui/Button'
+import { Select } from '../ui/Select'
 import type { MidiStatus } from './midi'
 import type { MidiMonitorEntry } from './useMidi'
 import './control.css'
@@ -45,17 +46,24 @@ function MidiMonitor({
 type MidiControlsProps = {
   status: MidiStatus
   deviceName: string | null
+  /** Every matched controller currently connected (raw port names). */
+  devices: string[]
   onConnect: () => void
+  /** Pick which connected controller drives the app, by its port name. */
+  onSelectDevice: (name: string) => void
   readMonitor: () => MidiMonitorEntry[]
 }
 
 /** Statusbar cluster for hardware control: connect button (MIDI access
- * needs a user gesture), connection LED, and the raw-byte monitor.
+ * needs a user gesture), a controller picker when more than one supported
+ * device is connected, connection LED, and the raw-byte monitor.
  * Presentational — App owns the useMidi hook so it can drive pad LEDs. */
 export function MidiControls({
   status,
   deviceName,
+  devices,
   onConnect,
+  onSelectDevice,
   readMonitor,
 }: MidiControlsProps) {
   const { t } = useTranslation()
@@ -64,6 +72,14 @@ export function MidiControls({
   return (
     <div className="midi">
       {connected && <MidiMonitor readMonitor={readMonitor} />}
+      {connected && devices.length > 1 && (
+        <Select
+          label={t('midi.device')}
+          value={deviceName ?? ''}
+          options={devices}
+          onChange={onSelectDevice}
+        />
+      )}
       {!connected && status !== 'unsupported' && (
         <Button onClick={onConnect} disabled={status === 'requesting'}>
           {t('midi.connect')}

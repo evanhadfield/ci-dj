@@ -7,11 +7,6 @@ import { useAudioEngine } from './audio/engineContext'
 import { FX_KINDS } from './audio/fx'
 import { applyAppIntent } from './control/appIntents'
 import { useControlBus } from './control/busContext'
-import {
-  CHANNEL_CUE_NOTE,
-  NOTE_ON_STATUS_BY_DECK,
-  TRANSPORT_CUE_NOTE,
-} from './control/flx4'
 import { MidiControls } from './control/MidiControls'
 import { useMidi } from './control/useMidi'
 import { MediaExplorer } from './media/MediaExplorer'
@@ -247,11 +242,12 @@ function App() {
   const midi = useMidi()
   const {
     status: midiStatus,
-    setLed,
     setPadLeds,
     setFxPadLeds,
     setLoopPadLeds,
     setCuePadLeds,
+    setChannelCueLed,
+    setTransportCueLed,
     ledEpoch,
   } = midi
   const [padCounts, setPadCounts] = useState<Record<DeckId, number>>({
@@ -321,16 +317,18 @@ function App() {
   }, [midiStatus, setLoopPadLeds, loopLedsA, loopLedsB, ledEpoch])
 
   // Cue LEDs (M10): channel CUE mirrors the headphone-cue toggles,
-  // transport CUE lights while a deck is primed off air.
+  // transport CUE lights while a deck is primed off air. The active driver
+  // owns the bytes (issue #30) — App speaks deck + on/off, not status/note.
   useEffect(() => {
     if (midiStatus !== 'connected') return
-    setLed(NOTE_ON_STATUS_BY_DECK.a, CHANNEL_CUE_NOTE, deckA.cue)
-    setLed(NOTE_ON_STATUS_BY_DECK.b, CHANNEL_CUE_NOTE, deckB.cue)
-    setLed(NOTE_ON_STATUS_BY_DECK.a, TRANSPORT_CUE_NOTE, deckA.primed)
-    setLed(NOTE_ON_STATUS_BY_DECK.b, TRANSPORT_CUE_NOTE, deckB.primed)
+    setChannelCueLed('a', deckA.cue)
+    setChannelCueLed('b', deckB.cue)
+    setTransportCueLed('a', deckA.primed)
+    setTransportCueLed('b', deckB.primed)
   }, [
     midiStatus,
-    setLed,
+    setChannelCueLed,
+    setTransportCueLed,
     deckA.cue,
     deckB.cue,
     deckA.primed,
@@ -408,7 +406,9 @@ function App() {
           <MidiControls
             status={midi.status}
             deviceName={midi.deviceName}
+            devices={midi.devices}
             onConnect={midi.connect}
+            onSelectDevice={midi.selectDevice}
             readMonitor={midi.readMonitor}
           />
         </div>

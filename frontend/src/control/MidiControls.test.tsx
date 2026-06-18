@@ -37,7 +37,9 @@ function Harness() {
     <MidiControls
       status={midi.status}
       deviceName={midi.deviceName}
+      devices={midi.devices}
       onConnect={midi.connect}
+      onSelectDevice={midi.selectDevice}
       readMonitor={midi.readMonitor}
     />
   )
@@ -75,15 +77,48 @@ describe('MidiControls', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 
-  it('offers a retry when no FLX4 is plugged in', async () => {
+  it('offers a retry when no supported controller is plugged in', async () => {
     stubMidiAccess([{ name: 'Some Keyboard', onmidimessage: null }])
     renderControls()
 
     fireEvent.click(screen.getByRole('button', { name: 'Connect MIDI' }))
     await waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent('No DDJ-FLX4 found'),
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'No supported controller found',
+      ),
     )
     expect(screen.getByRole('button', { name: 'Connect MIDI' })).toBeEnabled()
+  })
+
+  it('shows no picker for a single controller, one to switch between two', async () => {
+    stubMidiAccess([{ name: 'DDJ-FLX4 MIDI 1', onmidimessage: null }])
+    const { unmount } = renderControls()
+    fireEvent.click(screen.getByRole('button', { name: 'Connect MIDI' }))
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('DDJ-FLX4 MIDI 1'),
+    )
+    // One device: nothing to pick.
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    unmount()
+
+    stubMidiAccess([
+      { name: 'DDJ-FLX4 MIDI 1', onmidimessage: null },
+      { name: 'DDJ-400 MIDI 1', onmidimessage: null },
+    ])
+    renderControls()
+    fireEvent.click(screen.getByRole('button', { name: 'Connect MIDI' }))
+    // First match (the FLX4) binds; the picker offers both.
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('DDJ-FLX4 MIDI 1'),
+    )
+    const picker = screen.getByRole('combobox', { name: 'Controller' })
+    expect(picker).toBeInTheDocument()
+
+    // Choosing the DDJ-400 re-binds onto it.
+    fireEvent.change(picker, { target: { value: 'DDJ-400 MIDI 1' } })
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('DDJ-400 MIDI 1'),
+    )
   })
 
   it('publishes translated intents and shows raw bytes in the monitor', async () => {

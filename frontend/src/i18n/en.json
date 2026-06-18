@@ -18,11 +18,12 @@
   },
   "midi": {
     "connect": "Connect MIDI",
+    "device": "Controller",
     "status": {
       "unsupported": "MIDI unavailable",
       "idle": "MIDI off",
       "requesting": "Requesting MIDI…",
-      "no-device": "No DDJ-FLX4 found",
+      "no-device": "No supported controller found",
       "denied": "MIDI access denied"
     },
     "monitor": {
