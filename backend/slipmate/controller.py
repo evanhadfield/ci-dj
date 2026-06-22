@@ -9,6 +9,7 @@ the generation RPC: /api/render (the third Magenta engine), /api/generate
 
 import argparse
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -16,10 +17,8 @@ import math
 import multiprocessing as mp
 import os
 import queue
-import time
-
-import base64
 import struct
+import time
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -378,7 +377,9 @@ async def embed_query(request: Request) -> dict:
         raise HTTPException(status_code=502, detail=result["error"])
     vector_bytes = result["vector"]
     if len(vector_bytes) != EMBED_DIM * 4:
-        raise HTTPException(status_code=502, detail="embed produced a wrong-shaped vector")
+        raise HTTPException(
+            status_code=502, detail="embed produced a wrong-shaped vector"
+        )
     vector = list(struct.unpack(f"<{EMBED_DIM}f", vector_bytes))
     return {"vector": vector, "dim": EMBED_DIM}
 

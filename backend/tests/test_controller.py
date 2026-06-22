@@ -359,7 +359,10 @@ def test_embed_audio_returns_a_768_vector(client, render_worker, monkeypatch):
     "body",
     [
         {},
-        {"text": "x", "audio": {"pcm_base64": "AAAA", "sample_rate": 48000, "channels": 2}},
+        {
+            "text": "x",
+            "audio": {"pcm_base64": "AAAA", "sample_rate": 48000, "channels": 2},
+        },
         {"text": ""},
         {"text": "x" * (sa3.MAX_PROMPT_LENGTH + 1)},
         {"text": 7},
@@ -367,7 +370,13 @@ def test_embed_audio_returns_a_768_vector(client, render_worker, monkeypatch):
         {"audio": {"pcm_base64": "AAAA", "sample_rate": 44100, "channels": 2}},
         {"audio": {"pcm_base64": "AAAA", "sample_rate": 48000, "channels": 1}},
         # Three bytes is not a whole stereo f32 frame.
-        {"audio": {"pcm_base64": base64.b64encode(b"\x00\x00\x00").decode(), "sample_rate": 48000, "channels": 2}},
+        {
+            "audio": {
+                "pcm_base64": base64.b64encode(b"\x00\x00\x00").decode(),
+                "sample_rate": 48000,
+                "channels": 2,
+            }
+        },
         "not an object",
     ],
 )
