@@ -7,6 +7,10 @@ native Tauri app. See [`README.md`](README.md) for the full overview,
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for how it got here, and
 [`docs/adr/`](docs/adr/) for the architecture decisions.
 
+Collective-intelligence fork: the design and phased build plan for the crowd
+layer (additive, behind `COLLECTIVE_ENABLED`) lives at
+[`docs/collective/PLAN.md`](docs/collective/PLAN.md).
+
 ## Build / run / test
 
 All common tasks live in the root [`justfile`](justfile) — run `just` to list

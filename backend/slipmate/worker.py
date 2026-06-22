@@ -32,6 +32,7 @@ def run_deck_worker(
     out_queue,
     engine_factory=DeckEngine,
     clip_queue=None,
+    embed_queue=None,
 ) -> None:
     logging.basicConfig(level=logging.INFO)
     logger.info("deck %s: loading %s", deck_id, model)
@@ -96,6 +97,28 @@ def run_deck_worker(
                         clip_queue.put((cmd["id"], {"error": "render failed"}))
                     else:
                         clip_queue.put((cmd["id"], {"pcm": pcm}))
+            elif kind == "embed_query":
+                # Collective layer (Phase 0, docs/collective/PLAN.md §2):
+                # /api/embed routes here for a 768-dim MusicCoCa vector.
+                # Like render_clip, answers on a dedicated queue so the
+                # request never sits behind the audio stream.
+                if embed_queue is None:
+                    logger.warning(
+                        "deck %s: embed_query with no embed queue; dropped", deck_id
+                    )
+                else:
+                    try:
+                        if "text" in cmd:
+                            vector = engine.embed_text(cmd["text"])
+                        else:
+                            vector = engine.embed_audio(cmd["pcm"])
+                    except Exception as error:
+                        logger.exception("deck %s: embed_query failed", deck_id)
+                        embed_queue.put(
+                            (cmd["id"], {"error": f"embed failed: {error}"})
+                        )
+                    else:
+                        embed_queue.put((cmd["id"], {"vector": vector.tobytes()}))
             elif kind == "embed_sample":
                 started = time.monotonic()
                 try:

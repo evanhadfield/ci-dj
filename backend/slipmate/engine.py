@@ -155,6 +155,28 @@ class DeckEngine:
         )
         return waveform.samples.astype(np.float32).tobytes()
 
+    def embed_text(self, text: str) -> np.ndarray:
+        """Return MusicCoCa's 768-dim embedding for `text` (collective layer,
+        docs/collective/PLAN.md §2). Uses the same encoder + LRU cache as
+        text style targets, so a hot taste-vector vocabulary stays cheap."""
+        return self._embed_cached(text).astype(np.float32)
+
+    def embed_audio(self, pcm: bytes) -> np.ndarray:
+        """Return MusicCoCa's 768-dim embedding for `pcm` (collective layer).
+        `pcm` is the wire format (interleaved stereo float32 LE at
+        SAMPLE_RATE), matching `embed_sample`. The cache is not used:
+        callers identify clips, not us."""
+        samples = np.frombuffer(pcm, dtype="<f4")
+        if samples.size == 0 or samples.size % CHANNELS:
+            raise ValueError("audio PCM must be whole interleaved stereo frames")
+        from magenta_rt import audio
+
+        waveform = audio.Waveform(
+            samples=samples.reshape(-1, CHANNELS).astype(np.float32),
+            sample_rate=SAMPLE_RATE,
+        )
+        return self._system.embed_style(waveform).astype(np.float32)
+
     def render_clip(self, prompt: str, seconds: float) -> bytes:
         """Render a standalone clip from a text prompt (M18, ADR-0012).
 

@@ -5,7 +5,9 @@ enter without one.
 """
 
 import asyncio
+import base64
 import queue
+import struct
 
 import pytest
 from fastapi.testclient import TestClient
@@ -33,13 +35,16 @@ class FakeRenderWorker:
     def __init__(self):
         self.cmd_queue = queue.Queue()
         self.clip_queue = queue.Queue()
+        self.embed_queue = queue.Queue()
         self.render_lock = asyncio.Lock()
+        self.embed_lock = asyncio.Lock()
         self.process = FakeProcess()
         self.ready = False
         self.ready_waits = 0
         # The worker half of the round-trip: a configured response
         # answers any render_clip command.
         self.render_response = None
+        self.embed_response = None
 
     def await_ready(self):
         self.ready_waits += 1
@@ -49,6 +54,8 @@ class FakeRenderWorker:
         self.cmd_queue.put(command)
         if command.get("type") == "render_clip" and self.render_response is not None:
             self.clip_queue.put((command["id"], self.render_response))
+        if command.get("type") == "embed_query" and self.embed_response is not None:
+            self.embed_queue.put((command["id"], self.embed_response))
 
 
 @pytest.fixture
@@ -293,6 +300,90 @@ def test_render_validates_the_trust_boundary(client, render_worker, body):
     response = client.post("/api/render", json=body)
     assert response.status_code == 422
     assert render_worker.cmd_queue.empty()
+
+
+# --- /api/embed (Phase 0, collective layer; docs/collective/PLAN.md §2) ----
+
+
+def fake_vector_bytes(value: float = 0.5) -> bytes:
+    return struct.pack(f"<{controller.EMBED_DIM}f", *([value] * controller.EMBED_DIM))
+
+
+def test_embed_is_off_by_default(client, render_worker, monkeypatch):
+    monkeypatch.delenv("COLLECTIVE_ENABLED", raising=False)
+    response = client.post("/api/embed", json={"text": "warm disco funk"})
+    assert response.status_code == 503
+    assert "COLLECTIVE_ENABLED" in response.json()["detail"]
+    # The worker never saw the command — feature flag is the first gate.
+    assert render_worker.cmd_queue.empty()
+
+
+def test_embed_text_returns_a_768_vector(client, render_worker, monkeypatch):
+    monkeypatch.setenv("COLLECTIVE_ENABLED", "1")
+    render_worker.embed_response = {"vector": fake_vector_bytes(0.25)}
+    response = client.post("/api/embed", json={"text": " warm disco funk "})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dim"] == 768
+    assert len(body["vector"]) == 768
+    assert body["vector"][0] == pytest.approx(0.25)
+    command = render_worker.cmd_queue.get_nowait()
+    assert command["type"] == "embed_query"
+    assert command["text"] == "warm disco funk"
+
+
+def test_embed_audio_returns_a_768_vector(client, render_worker, monkeypatch):
+    monkeypatch.setenv("COLLECTIVE_ENABLED", "1")
+    render_worker.embed_response = {"vector": fake_vector_bytes(-0.5)}
+    pcm = struct.pack("<8f", *([0.0] * 8))  # 4 stereo frames
+    response = client.post(
+        "/api/embed",
+        json={
+            "audio": {
+                "pcm_base64": base64.b64encode(pcm).decode("ascii"),
+                "sample_rate": 48000,
+                "channels": 2,
+            }
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["vector"]) == 768
+    assert body["vector"][0] == pytest.approx(-0.5)
+    command = render_worker.cmd_queue.get_nowait()
+    assert command["type"] == "embed_query"
+    assert command["pcm"] == pcm
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"text": "x", "audio": {"pcm_base64": "AAAA", "sample_rate": 48000, "channels": 2}},
+        {"text": ""},
+        {"text": "x" * (sa3.MAX_PROMPT_LENGTH + 1)},
+        {"text": 7},
+        {"audio": {"pcm_base64": "not base64!", "sample_rate": 48000, "channels": 2}},
+        {"audio": {"pcm_base64": "AAAA", "sample_rate": 44100, "channels": 2}},
+        {"audio": {"pcm_base64": "AAAA", "sample_rate": 48000, "channels": 1}},
+        # Three bytes is not a whole stereo f32 frame.
+        {"audio": {"pcm_base64": base64.b64encode(b"\x00\x00\x00").decode(), "sample_rate": 48000, "channels": 2}},
+        "not an object",
+    ],
+)
+def test_embed_validates_the_trust_boundary(client, render_worker, monkeypatch, body):
+    monkeypatch.setenv("COLLECTIVE_ENABLED", "1")
+    render_worker.embed_response = {"vector": fake_vector_bytes()}
+    response = client.post("/api/embed", json=body)
+    assert response.status_code == 422
+    assert render_worker.cmd_queue.empty()
+
+
+def test_embed_maps_worker_failure_to_502(client, render_worker, monkeypatch):
+    monkeypatch.setenv("COLLECTIVE_ENABLED", "1")
+    render_worker.embed_response = {"error": "embed failed: bad input"}
+    response = client.post("/api/embed", json={"text": "x"})
+    assert response.status_code == 502
 
 
 def test_models_endpoint_returns_list_and_ram(client, monkeypatch):

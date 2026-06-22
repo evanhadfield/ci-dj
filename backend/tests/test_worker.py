@@ -21,10 +21,13 @@ class FakeEngine:
         self.style_sample_keys = []
         self.samples = []
         self.renders = []
+        self.text_embeds = []
+        self.audio_embeds = []
         self.fail_set_style = False
         self.fail_embed_sample = False
         self.fail_generate = False
         self.fail_render = False
+        self.fail_embed_query = False
 
     def render_clip(self, prompt, seconds):
         if self.fail_render:
@@ -43,26 +46,47 @@ class FakeEngine:
             raise RuntimeError("audio embed blew up")
         self.samples.append((sample_id, len(pcm)))
 
+    def embed_text(self, text):
+        if self.fail_embed_query:
+            raise RuntimeError("text embed blew up")
+        self.text_embeds.append(text)
+        return _fake_vector()
+
+    def embed_audio(self, pcm):
+        if self.fail_embed_query:
+            raise RuntimeError("audio embed blew up")
+        self.audio_embeds.append(pcm)
+        return _fake_vector()
+
     def generate_chunk(self):
         if self.fail_generate:
             raise RuntimeError("inference blew up")
         return FAKE_PCM
 
 
+def _fake_vector():
+    import numpy as np
+
+    return np.zeros(768, dtype=np.float32)
+
+
 class DeckHarness:
-    def __init__(self, with_clip_queue=True):
+    def __init__(self, with_clip_queue=True, with_embed_queue=True):
         self.engine = FakeEngine()
         self.cmd_queue = queue.Queue()
         self.out_queue = queue.Queue()
         # Production deck workers run without a clip queue — only the
-        # render worker gets one (M18).
+        # render worker gets one (M18). The embed queue (Phase 0,
+        # collective layer) is similarly render-only.
         self.clip_queue = queue.Queue() if with_clip_queue else None
+        self.embed_queue = queue.Queue() if with_embed_queue else None
         self.thread = threading.Thread(
             target=run_deck_worker,
             args=("test", "fake", self.cmd_queue, self.out_queue),
             kwargs={
                 "engine_factory": lambda model: self.engine,
                 "clip_queue": self.clip_queue,
+                "embed_queue": self.embed_queue,
             },
             daemon=True,
         )
@@ -205,6 +229,32 @@ def test_render_failure_answers_an_error_and_worker_survives(deck):
     deck.send(type="render_clip", id="clip-3", prompt="air horn", seconds=2.0)
     _, result = deck.clip_queue.get(timeout=3.0)
     assert result == {"error": "render failed"}
+
+    deck.send(type="play")
+    assert deck.next_event("audio") == FAKE_PCM
+
+
+def test_embed_query_text_answers_on_the_embed_queue(deck):
+    deck.send(type="embed_query", id="embed-1", text="warm disco funk")
+    result_id, result = deck.embed_queue.get(timeout=3.0)
+    assert result_id == "embed-1"
+    assert len(result["vector"]) == 768 * 4  # float32 bytes
+    assert deck.engine.text_embeds == ["warm disco funk"]
+
+
+def test_embed_query_audio_answers_on_the_embed_queue(deck):
+    deck.send(type="embed_query", id="embed-2", pcm=b"\x00" * 32)
+    result_id, result = deck.embed_queue.get(timeout=3.0)
+    assert result_id == "embed-2"
+    assert len(result["vector"]) == 768 * 4
+    assert deck.engine.audio_embeds == [b"\x00" * 32]
+
+
+def test_embed_query_failure_returns_error_and_worker_survives(deck):
+    deck.engine.fail_embed_query = True
+    deck.send(type="embed_query", id="embed-3", text="x")
+    _, result = deck.embed_queue.get(timeout=3.0)
+    assert "embed failed" in result["error"]
 
     deck.send(type="play")
     assert deck.next_event("audio") == FAKE_PCM

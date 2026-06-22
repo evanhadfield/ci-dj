@@ -18,12 +18,15 @@ import os
 import queue
 import time
 
+import base64
+import struct
+
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
-from . import engine, sa3
+from . import collective, engine, sa3
 from .worker import run_deck_worker
 
 logger = logging.getLogger(__name__)
@@ -56,6 +59,15 @@ async def _render_lifespan(_: FastAPI):
 app = FastAPI(lifespan=_render_lifespan)
 
 
+# An embed is a single MusicCoCa pass with no generation steps — sub-second
+# once the model is warm, but the first call also pays the model load.
+EMBED_TIMEOUT_SECONDS = 30
+EMBED_DIM = 768
+# Bound the audio payload the collective endpoint accepts. ADR-0011 caps a
+# style sample at 12 s; the same ceiling keeps a malformed request from
+# pulling tens of MB through JSON.
+MAX_EMBED_AUDIO_SECONDS = 12
+
 # Worst case: a 32 s clip at a pessimistic ~1× real time, plus a cold
 # prompt embed; well past it the worker is wedged, not slow.
 RENDER_TIMEOUT_SECONDS = 90
@@ -83,26 +95,31 @@ class RenderProcess:
     never receives `play` — but lives apart from the decks, so pads can
     fill while both streams run. Spawned lazily on the first request:
     a resident third model (~2 GB for mrt2_small) is only paid for by
-    sessions that use it.
+    sessions that use it. The same worker also serves /api/embed
+    (Phase 0, docs/collective/PLAN.md §2) since both endpoints want
+    MusicCoCa on the same model; the locks keep render and embed from
+    interleaving on the worker.
     """
 
     def __init__(self, model: str = DEFAULT_MODEL):
         self.model = model
         self.render_lock = asyncio.Lock()
+        self.embed_lock = asyncio.Lock()
         self._spawn()
 
     def _spawn(self) -> None:
         ctx = mp.get_context("spawn")
         self.cmd_queue = ctx.Queue()
         # Only the "ready" status ever lands here; renders answer on
-        # clip_queue like a deck's.
+        # clip_queue like a deck's, embeds answer on embed_queue.
         self.out_queue = ctx.Queue(maxsize=4)
         self.clip_queue = ctx.Queue()
+        self.embed_queue = ctx.Queue()
         self.ready = False
         self.process = ctx.Process(
             target=run_deck_worker,
             args=("render", self.model, self.cmd_queue, self.out_queue),
-            kwargs={"clip_queue": self.clip_queue},
+            kwargs={"clip_queue": self.clip_queue, "embed_queue": self.embed_queue},
             name="render-worker",
             daemon=True,
         )
@@ -249,6 +266,121 @@ async def render_clip(request: Request) -> Response:
         content=float32_wav(result["pcm"], engine.SAMPLE_RATE, engine.CHANNELS),
         media_type="audio/wav",
     )
+
+
+@app.post("/api/embed")
+async def embed_query(request: Request) -> dict:
+    """Embed text or audio into MusicCoCa's 768-dim space (collective
+    layer, Phase 0; docs/collective/PLAN.md §2). Body is JSON: either
+    ``{"text": "warm disco funk"}`` or ``{"audio": {"pcm_base64": "...",
+    "sample_rate": 48000, "channels": 2}}`` where the PCM is float32 LE
+    (the deck wire format). Off by default — set ``COLLECTIVE_ENABLED=1``.
+    Reuses the render worker's encoder so we never load MusicCoCa twice."""
+    if not collective.is_enabled():
+        raise HTTPException(
+            status_code=503, detail="collective layer is off (COLLECTIVE_ENABLED=0)"
+        )
+    try:
+        parsed = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="body must be JSON") from None
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=422, detail="body must be a JSON object")
+    text = parsed.get("text")
+    audio = parsed.get("audio")
+    if (text is None) == (audio is None):
+        raise HTTPException(
+            status_code=422, detail="body must carry exactly one of 'text' or 'audio'"
+        )
+    command: dict
+    if text is not None:
+        if not (isinstance(text, str) and text.strip()):
+            raise HTTPException(
+                status_code=422, detail="'text' must be a non-empty string"
+            )
+        text = text.strip()
+        if len(text) > sa3.MAX_PROMPT_LENGTH:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'text' must be at most {sa3.MAX_PROMPT_LENGTH} characters",
+            )
+        command = {"type": "embed_query", "text": text}
+    else:
+        if not isinstance(audio, dict):
+            raise HTTPException(status_code=422, detail="'audio' must be an object")
+        pcm_base64 = audio.get("pcm_base64")
+        sample_rate = audio.get("sample_rate")
+        channels = audio.get("channels")
+        if not isinstance(pcm_base64, str):
+            raise HTTPException(
+                status_code=422, detail="'audio.pcm_base64' must be a base64 string"
+            )
+        if sample_rate != engine.SAMPLE_RATE:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'audio.sample_rate' must be {engine.SAMPLE_RATE}",
+            )
+        if channels != engine.CHANNELS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'audio.channels' must be {engine.CHANNELS}",
+            )
+        try:
+            pcm = base64.b64decode(pcm_base64, validate=True)
+        except (ValueError, base64.binascii.Error):
+            raise HTTPException(
+                status_code=422, detail="'audio.pcm_base64' is not valid base64"
+            ) from None
+        # Wire format: 4-byte f32 per sample × channels per frame.
+        max_bytes = (
+            int(MAX_EMBED_AUDIO_SECONDS * engine.SAMPLE_RATE) * engine.CHANNELS * 4
+        )
+        if not pcm or len(pcm) % (engine.CHANNELS * 4):
+            raise HTTPException(
+                status_code=422,
+                detail="'audio.pcm_base64' must decode to whole stereo f32 frames",
+            )
+        if len(pcm) > max_bytes:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'audio' must be at most {MAX_EMBED_AUDIO_SECONDS}s",
+            )
+        command = {"type": "embed_query", "pcm": pcm}
+    worker = ensure_render_worker()
+    async with worker.embed_lock:
+        if not worker.process.is_alive():
+            discard_render_worker(worker)
+            raise HTTPException(status_code=502, detail="embed engine died")
+        try:
+            await asyncio.to_thread(worker.await_ready)
+        except (queue.Empty, RuntimeError):
+            discard_render_worker(worker)
+            raise HTTPException(
+                status_code=502, detail="embed engine failed to start"
+            ) from None
+        # A previous timed-out embed may have answered late.
+        with contextlib.suppress(queue.Empty):
+            while True:
+                worker.embed_queue.get_nowait()
+        request_id = f"embed-{time.monotonic_ns()}"
+        command["id"] = request_id
+        worker.send(command)
+        try:
+            result_id, result = await asyncio.to_thread(
+                worker.embed_queue.get, True, EMBED_TIMEOUT_SECONDS
+            )
+        except queue.Empty:
+            discard_render_worker(worker)
+            raise HTTPException(status_code=502, detail="embed timed out") from None
+    if result_id != request_id:
+        raise HTTPException(status_code=502, detail="embed answered out of turn")
+    if "error" in result:
+        raise HTTPException(status_code=502, detail=result["error"])
+    vector_bytes = result["vector"]
+    if len(vector_bytes) != EMBED_DIM * 4:
+        raise HTTPException(status_code=502, detail="embed produced a wrong-shaped vector")
+    vector = list(struct.unpack(f"<{EMBED_DIM}f", vector_bytes))
+    return {"vector": vector, "dim": EMBED_DIM}
 
 
 @app.post("/api/generate")
