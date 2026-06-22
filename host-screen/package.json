@@ -1,0 +1,7 @@
+{
+  "name": "@slipmate/host-screen",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Projection-screen view for the collective DJ layer (docs/collective/PLAN.md §7c). Phase 0 scaffold — QR + 4-char room code only."
+}

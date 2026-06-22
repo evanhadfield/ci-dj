@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SlipMate — host</title>
+    <link rel="stylesheet" href="/host/main.css" />
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">SlipMate · join the room</p>
+      <div class="join">
+        <figure id="qr" aria-label="Join QR" class="qr">…</figure>
+        <div class="code">
+          <p class="label">Code</p>
+          <p id="code" class="value">— — — —</p>
+          <p id="url" class="url"></p>
+        </div>
+      </div>
+      <p class="hint">
+        Scan the QR or visit the URL and type the code. No app needed.
+      </p>
+    </main>
+    <script type="module" src="/host/main.js"></script>
+  </body>
+</html>

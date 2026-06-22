@@ -1,6 +1,9 @@
 .DS_Store
 node_modules/
 
+# Collective DJ layer (Phase 0+): TS build output for the aggregator service.
+/aggregator/dist/
+
 # Raw demo footage (large; only the composed clip in docs/img/ is committed)
 demo-raw/
 

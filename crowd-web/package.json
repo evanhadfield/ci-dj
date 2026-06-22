@@ -1,0 +1,7 @@
+{
+  "name": "@slipmate/crowd-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Crowd-facing phone PWA for the collective DJ layer (docs/collective/PLAN.md §7). Phase 0 scaffold — empty room landing only. Phase 1 introduces a TypeScript + bundler stack."
+}

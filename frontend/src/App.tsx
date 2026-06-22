@@ -9,6 +9,9 @@ import { applyAppIntent } from './control/appIntents'
 import { useControlBus } from './control/busContext'
 import { MidiControls } from './control/MidiControls'
 import { useMidi } from './control/useMidi'
+import { InfluencePanel } from './collective/InfluencePanel'
+import { INITIAL_INFLUENCE, type CrowdInfluence } from './collective/influence'
+import { isCollectiveEnabled } from './collective/flag'
 import { MediaExplorer } from './media/MediaExplorer'
 import { DeckColumn } from './deck/DeckColumn'
 import { useDeck } from './deck/useDeck'
@@ -239,6 +242,12 @@ function App() {
     return aPlayback ? phaseOffsetBeats(a, b) : phaseOffsetBeats(b, a)
   }, [deckA, deckB])
 
+  // Collective layer (Phase 0): the influence macro is inert — its
+  // state lives here but no consumer reads it yet. Rendering is gated
+  // on the build flag inside InfluencePanel, so a build without
+  // VITE_COLLECTIVE_ENABLED leaves SlipMate unchanged.
+  const [influence, setInfluence] = useState<CrowdInfluence>(INITIAL_INFLUENCE)
+
   const midi = useMidi()
   const {
     status: midiStatus,
@@ -418,6 +427,9 @@ function App() {
           getSourceA={deckA.getZoomSource}
           getSourceB={deckB.getZoomSource}
         />
+      )}
+      {isCollectiveEnabled() && (
+        <InfluencePanel influence={influence} onChange={setInfluence} />
       )}
       <div className="app__booth">
         <DeckColumn

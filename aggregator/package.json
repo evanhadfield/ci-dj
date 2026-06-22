@@ -1,0 +1,25 @@
+{
+  "name": "@slipmate/aggregator",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Collective DJ aggregator: rooms, signals, taste vectors, vibe-prompt pool, bridge to SlipMate (docs/collective/PLAN.md §2). Phase 0 scaffold — rooms + transport/identity seams only.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --import tsx 'src/**/*.test.ts'"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/qrcode": "^1.5.5",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "~5.6.3"
+  }
+}
