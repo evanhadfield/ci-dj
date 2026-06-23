@@ -20,8 +20,10 @@ import {
   ONBOARDING_CARD_LIMIT,
 } from '../signals/room-state.js'
 import type {
+  BridgeClientMessage,
   BridgeServerMessage,
   HostServerMessage,
+  PeekServerMessage,
   PhoneClientMessage,
   PhoneServerMessage,
   VibeCard,
@@ -163,6 +165,11 @@ export function attachWsServer(
       if (!code || !options.rooms.get(code)) return socket.destroy()
       if (!authorizeBridge(req, options.bridge)) return socket.destroy()
       accept((ws) => handleBridge(ws, code, ensureBundle))
+      return
+    }
+    if (role === '/ws/peek') {
+      if (!code || !options.rooms.get(code)) return socket.destroy()
+      accept((ws) => handlePeek(ws, code, ensureBundle))
       return
     }
     socket.destroy()
@@ -361,34 +368,75 @@ async function handleHost(
   } satisfies HostServerMessage)
 
   function pushSignals(): void {
-    const snapshot = bundle.signals.snapshot()
-    const label = describeBlend(snapshot.applied) || ''
-    const shifting = bundle.isShifting(snapshot.applied)
-    // Phase 2: source the labels from the prompt pool so user-suggested
-    // prompts surface with their own text. The host-screen renders these
-    // as circles sized by `support` (the Wilson lower bound), still in
-    // single-organism mode — clusters land in Phase 3.
-    const promptLabels = new Map(snapshot.activePrompts.map((p) => [p.id, p.label]))
-    const vibeSupport = [...snapshot.vibeSupport.entries()]
-      .map(([id, support]) => ({
-        id,
-        label: promptLabels.get(id) ?? id,
-        support,
-      }))
-      .sort((a, b) => b.support - a.support)
-    const message: HostServerMessage = {
-      type: 'signals',
-      label,
-      temperature: snapshot.temperature.value,
-      shifting,
-      participantCount: snapshot.participantCount,
-      effectiveParticipants: snapshot.effectiveParticipants,
-      vibeSupport,
-    }
-    send(ws, message)
+    send(ws, buildSignalsMessage(bundle))
   }
   pushSignals()
   const unsubscribe = bundle.signals.subscribe(() => pushSignals())
+  ws.on('close', () => unsubscribe())
+}
+
+/** Build the `signals` payload shared by `/ws/host` and `/ws/peek`.
+ * Phase 3 expansion: per-vibe cluster sentiment + cluster sizes +
+ * applied-policy footer. Below `CLUSTER_MIN_N` the cluster fields stay
+ * empty and the host stays in single-organism mode. */
+function buildSignalsMessage(bundle: RoomBundle): HostServerMessage {
+  const snapshot = bundle.signals.snapshot()
+  const label = describeBlend(snapshot.applied) || ''
+  const shifting = bundle.isShifting(snapshot.applied)
+  const promptLabels = new Map(snapshot.activePrompts.map((p) => [p.id, p.label]))
+  const vibeSupport = [...snapshot.vibeSupport.entries()]
+    .map(([id, support]) => ({
+      id,
+      label: promptLabels.get(id) ?? id,
+      support,
+      clusterMass: (snapshot.clusterMass.get(id) ?? []).map((m) => ({
+        clusterId: m.clusterId,
+        agree: m.agree,
+        disagree: m.disagree,
+        pass: m.pass,
+      })),
+    }))
+    .sort((a, b) => b.support - a.support)
+  const clusters = snapshot.clusters.map((c) => ({ id: c.id, size: c.size }))
+  return {
+    type: 'signals',
+    label,
+    temperature: snapshot.temperature.value,
+    shifting,
+    participantCount: snapshot.participantCount,
+    effectiveParticipants: snapshot.effectiveParticipants,
+    activeVoters: snapshot.activeVoters,
+    vibeSupport,
+    clusters,
+    policy: { choice: snapshot.policy.choice, appliedPolicy: snapshot.policy.appliedPolicy },
+  }
+}
+
+async function handlePeek(
+  ws: WebSocket,
+  code: string,
+  ensureBundle: (code: string) => Promise<RoomBundle>,
+): Promise<void> {
+  const bundle = await ensureBundle(code)
+  function pushPeek(): void {
+    const signals = buildSignalsMessage(bundle)
+    if (signals.type !== 'signals') return
+    const message: PeekServerMessage = {
+      type: 'peek',
+      label: signals.label,
+      temperature: signals.temperature,
+      shifting: signals.shifting,
+      participantCount: signals.participantCount,
+      effectiveParticipants: signals.effectiveParticipants,
+      activeVoters: signals.activeVoters,
+      vibeSupport: signals.vibeSupport,
+      clusters: signals.clusters,
+      policy: signals.policy,
+    }
+    send(ws, message)
+  }
+  pushPeek()
+  const unsubscribe = bundle.signals.subscribe(() => pushPeek())
   ws.on('close', () => unsubscribe())
 }
 
@@ -406,6 +454,28 @@ async function handleBridge(
       prompts: intent.prompts,
       slewStepCos: intent.slewStepCos,
     } satisfies BridgeServerMessage)
+  })
+  // Phase 3 §6: the frontend's InfluencePanel sends `policy_select` to
+  // pick centroid / pr / maximin / auto. The aggregator stores it on
+  // the room and the next tick picks it up.
+  ws.on('message', (raw) => {
+    let parsed: BridgeClientMessage
+    try {
+      parsed = JSON.parse(raw.toString()) as BridgeClientMessage
+    } catch {
+      return
+    }
+    if (parsed.type === 'policy_select') {
+      const choice = parsed.choice
+      if (
+        choice === 'centroid' ||
+        choice === 'pr' ||
+        choice === 'maximin' ||
+        choice === 'auto'
+      ) {
+        bundle.signals.setPolicyChoice(choice)
+      }
+    }
   })
   ws.on('close', () => off())
 }

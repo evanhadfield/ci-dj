@@ -94,13 +94,36 @@ export type HostServerMessage =
       shifting: boolean
       participantCount: number
       effectiveParticipants: number
+      /** Phase 3: active voters (rows with at least one OpinionMatrix
+       * vote). Drives the host-screen's "split-ring vs single-organism"
+       * toggle and the `CLUSTER_MIN_N` floor copy. */
+      activeVoters: number
       /** Per-vibe support (PLAN.md §7c single-organism mode).
        *
        * Phase 1 sized this by per-seed "liked mass". Phase 2 sizes it
        * by `VibePrompt.support` from the OpinionMatrix's Wilson lower
        * bound, so user-suggested prompts share the same scale as the
-       * seed catalog. */
-      vibeSupport: { id: string; label: string; support: number }[]
+       * seed catalog.
+       *
+       * Phase 3 layers per-vibe `clusterMass` so the host-screen
+       * split-ring renderer can show how each opinion cluster feels
+       * about a vibe (PLAN.md §7c). `clusterMass` stays empty below
+       * `CLUSTER_MIN_N` — single-organism mode falls back to the
+       * Phase 2 sizing alone. */
+      vibeSupport: {
+        id: string
+        label: string
+        support: number
+        clusterMass: { clusterId: string; agree: number; disagree: number; pass: number }[]
+      }[]
+      /** Phase 3: opinion-cluster sizes for the host-screen legend
+       * (PLAN.md §7c). Empty below `CLUSTER_MIN_N`. */
+      clusters: { id: string; size: number }[]
+      /** Phase 3 §6: the policy choice the room is running under and
+       * the resolved blend driving the deck this tick. The host-screen
+       * surfaces the choice as a small footer; the policy values per se
+       * are logged-only (DJ flips through the InfluencePanel selector). */
+      policy: { choice: 'centroid' | 'pr' | 'maximin' | 'auto'; appliedPolicy: 'centroid' | 'pr' | 'maximin' }
     }
 
 /** Aggregator → bridge (frontend). */
@@ -112,3 +135,37 @@ export type BridgeServerMessage =
       slewStepCos?: number
     }
   | { type: 'hello'; deck: 'a' | 'b' }
+
+/** Bridge (frontend) → aggregator. Phase 3 §6: the DJ chooses the
+ * social-choice policy from `InfluencePanel`; the choice rides over
+ * the bridge socket. The aggregator stores it on the room and the
+ * next tick uses it. */
+export type BridgeClientMessage = {
+  type: 'policy_select'
+  choice: 'centroid' | 'pr' | 'maximin' | 'auto'
+}
+
+/** Aggregator → peek (`/ws/peek`). A throttled mirror of the host
+ * channel sized for crowd-web's read-only Room tab (PLAN.md §7b.3) —
+ * carries the same `signals` shape minus the join chrome, since
+ * phones already know the code from their URL. The peek channel
+ * scales to many subscribers per room; the host channel still
+ * assumes one consumer (the projection). */
+export type PeekServerMessage =
+  | {
+      type: 'peek'
+      label: string
+      temperature: number
+      shifting: boolean
+      participantCount: number
+      effectiveParticipants: number
+      activeVoters: number
+      vibeSupport: {
+        id: string
+        label: string
+        support: number
+        clusterMass: { clusterId: string; agree: number; disagree: number; pass: number }[]
+      }[]
+      clusters: { id: string; size: number }[]
+      policy: { choice: 'centroid' | 'pr' | 'maximin' | 'auto'; appliedPolicy: 'centroid' | 'pr' | 'maximin' }
+    }

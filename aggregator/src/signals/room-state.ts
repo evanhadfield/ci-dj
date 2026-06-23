@@ -29,6 +29,17 @@ import { OpinionMatrix, type Vote } from './opinion-matrix.js'
 import { recencyBonus, sampleBeta, type RandomFn } from './sampling.js'
 import type { EmbedClient } from './embed.js'
 import type { VibeCard } from './messages.js'
+import {
+  clusterMatrix,
+  clusterMass,
+  computePolicies,
+  type ClusterMass,
+  type OpinionCluster,
+  type PolicyChoice,
+  type PolicyOutputs,
+} from './clusters.js'
+
+export { CLUSTER_MIN_N } from './clusters.js'
 
 /** Default tick cadence. Matches a musical phrase (§5 closing), giving
  * the slew limiter (§5.8) time to look like drift, not jitter. */
@@ -52,6 +63,10 @@ export type RoomSignals = {
    * line, also the `effectiveParticipants` quorum check (§5.5
    * `CLUSTER_MIN_N`). */
   participantCount: number
+  /** Number of active voters (rows with at least one vote on the
+   * OpinionMatrix). The §5.5 `CLUSTER_MIN_N` gate reads this — Phase 3
+   * splits the room into clusters only when this clears the floor. */
+  activeVoters: number
   /** Per-prompt support driven by Phase 2's OpinionMatrix Wilson lower
    * bound (PLAN.md §7c single-organism map). Phase 1's "liked mass per
    * seed id" was a pre-card-stack fallback; Phase 2 sources this from
@@ -60,6 +75,23 @@ export type RoomSignals = {
   /** The active prompt pool — every prompt the room can vote on, both
    * seed and user-submitted, minus retired (satisfied) and unapproved. */
   activePrompts: readonly VibePrompt[]
+  /** Phase 3: the opinion groups discovered by PCA + K-means on the
+   * OpinionMatrix. Empty below `CLUSTER_MIN_N` — the room renders in
+   * single-organism mode and the policy collapses to centroid. */
+  clusters: readonly OpinionCluster[]
+  /** Phase 3: per-vibe cluster sentiment, keyed by prompt id. The
+   * host-screen split-ring renderer reads this directly. Empty below
+   * the gate. */
+  clusterMass: ReadonlyMap<VibePromptId, readonly ClusterMass[]>
+  /** Phase 3: per-user cosine distance to the dominant PCA subspace
+   * (PLAN.md §5 deferred ledger — "logged, not driving"). Phase 4
+   * closes the loop into the contribution cap. */
+  outlierDistances: ReadonlyMap<string, number>
+  /** Phase 3 §6: all three policy blends computed this tick + which
+   * one drove the applied target. Logged so the operator can see the
+   * three side-by-side (auto / pr / maximin) even when only one is
+   * driving the deck. */
+  policy: PolicyOutputs
 }
 
 /** Phase 2 surfaces the suggestion pool and the moderation lane; the
@@ -100,12 +132,39 @@ export class RoomSignalsState {
    * filters dealt cards so a user doesn't see the same prompt twice
    * in their stack (the Thompson sampler is independent of this set). */
   private readonly dealtBy = new Map<string, Set<VibePromptId>>()
+  /** Phase 3 §6: the DJ's policy selection, defaulting to `auto`.
+   * `setPolicyChoice` mutates this; the next tick reads it. */
+  private policyChoice: PolicyChoice = 'auto'
+  /** Monotonic tick counter that feeds the `pr` rotation slot. */
+  private tickCount = 0
+  private lastClusters: readonly OpinionCluster[] = []
+  private lastClusterMass: ReadonlyMap<VibePromptId, readonly ClusterMass[]> = new Map()
+  private lastOutliers: ReadonlyMap<string, number> = new Map()
+  private lastPolicy: PolicyOutputs = {
+    centroid: new Map(),
+    pr: new Map(),
+    maximin: new Map(),
+    resolved: new Map(),
+    choice: 'auto',
+    appliedPolicy: 'centroid',
+  }
 
   constructor(now: number = Date.now(), options: RoomStateOptions = {}) {
     this.temperature = emptyTemperature(now)
     this.pool = new VibePromptPool(now)
     this.embedClient = options.embedClient ?? null
     this.random = options.random ?? Math.random
+  }
+
+  /** Phase 3 §6: the DJ-selectable social-choice policy. Stored on the
+   * room so a reconnecting bridge sees the active choice without
+   * re-pushing it. `auto` = centroid under `CLUSTER_MIN_N`, `pr` over. */
+  setPolicyChoice(choice: PolicyChoice): void {
+    this.policyChoice = choice
+  }
+
+  policyChoiceValue(): PolicyChoice {
+    return this.policyChoice
   }
 
   /** Seat a phone. Idempotent — a reconnect with the same `userId`
@@ -262,10 +321,25 @@ export class RoomSignalsState {
    * cascade drops orphan opinion-matrix rows so a long set doesn't
    * grow unbounded. */
   tick(now: number = Date.now()): RoomSignals {
+    this.tickCount++
     this.temperature = decayedTemperature(this.temperature, now)
+    // Phase 3 cluster + policy pass runs before the pipeline so the
+    // policy's explicit blend can compose with the taste-EWMA target
+    // (§5.7).
+    const clustering = clusterMatrix(this.matrix, { random: this.random })
+    this.lastClusters = clustering.clusters
+    this.lastOutliers = clustering.outlierDistances
+    const promptWeights = this.computePromptSupport()
+    this.lastPolicy = computePolicies(this.lastClusters, {
+      choice: this.policyChoice,
+      rotationTick: this.tickCount,
+      promptWeights,
+    })
+    this.lastClusterMass = this.computeClusterMass(this.lastClusters)
     const outputs: PipelineOutputs = tick({
       tastes: this.tastes,
       previousApplied: this.applied,
+      policyTarget: this.lastPolicy.resolved,
     })
     this.applied = outputs.applied
     this.target = outputs.target
@@ -289,8 +363,13 @@ export class RoomSignalsState {
       effectiveParticipants: this.effective,
       temperature: this.temperature,
       participantCount: this.tastes.size,
+      activeVoters: this.matrix.activeVoters(),
       vibeSupport: this.computePromptSupport(),
       activePrompts: this.pool.active(),
+      clusters: this.lastClusters,
+      clusterMass: this.lastClusterMass,
+      outlierDistances: this.lastOutliers,
+      policy: this.lastPolicy,
     }
   }
 
@@ -339,6 +418,24 @@ export class RoomSignalsState {
     if (top.length === 0) return null
     const prompt = this.pool.get(top[0]!.id)
     return prompt?.embedding ?? null
+  }
+
+  private computeClusterMass(
+    clusters: readonly OpinionCluster[],
+  ): ReadonlyMap<VibePromptId, readonly ClusterMass[]> {
+    if (clusters.length === 0) return new Map()
+    const out = new Map<VibePromptId, readonly ClusterMass[]>()
+    for (const prompt of this.pool.all()) {
+      if (!prompt.approved) continue
+      const mass = clusterMass(clusters, this.matrix, prompt.id)
+      // Only surface prompts where at least one cluster has weighed
+      // in — the host-screen's empty-segment ring is more confusing
+      // than just keeping the legacy single-organism ring for those.
+      if (mass.some((m) => m.agree + m.disagree + m.pass > 0)) {
+        out.set(prompt.id, mass)
+      }
+    }
+    return out
   }
 
   private computePromptSupport(): ReadonlyMap<VibePromptId, number> {

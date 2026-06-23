@@ -33,6 +33,13 @@ export const SHRINKAGE_K = 6
  * model's ~3 s reaction phrase under our default 1.5 s tick — full
  * traversal from "off" to "on" ≈ 12 ticks ≈ 18 s. */
 export const MAX_SLEW_STEP_COS = 0.08
+/** Weight of the §6 policy blend when composed with the taste-EWMA
+ * target (§5.7). 0.5 = balanced: the explicit cluster-driven
+ * preferences and the continuous taste pull each get half a say. The
+ * pipeline still hands the slew/influence-gate stages exactly one
+ * `target`, so this constant collapses the two streams into one
+ * inside `compose`. Phase 4 can promote this to a DJ-tunable knob. */
+export const POLICY_BLEND_WEIGHT = 0.5
 
 export type PipelineInputs = {
   /** Per-user taste state after decay + tap ingest (§5.1–.2). */
@@ -43,6 +50,12 @@ export type PipelineInputs = {
   djBaseline?: VibeBlend
   /** The blend the bridge applied last tick — the slew anchor (§5.8). */
   previousApplied: VibeBlend
+  /** §5.7 explicit stream — the social-choice policy's blend over the
+   * vibe-prompt pool. Phase 3 wires this from `computePolicies` in
+   * `clusters.ts`. When empty (Phase 1/2 fallback, or clustering
+   * below the gate with no policy output), the pipeline collapses to
+   * the pre-Phase-3 taste-only path. */
+  policyTarget?: VibeBlend
 }
 
 export type PipelineOutputs = {
@@ -103,7 +116,15 @@ function slew(previous: VibeBlend, target: VibeBlend): VibeBlend {
 export function tick(inputs: PipelineInputs): PipelineOutputs {
   const prior = inputs.djBaseline ?? uniformBlend()
   const { blend: crowdRaw, effective } = sumContributions(inputs.tastes)
-  const target = shrink(crowdRaw, prior, effective)
+  const shrunk = shrink(crowdRaw, prior, effective)
+  // §5.7 compose: mix the taste-EWMA target with the policy's explicit
+  // blend. Empty policy → identity (Phase 1/2 path). The mix is a
+  // lerp over the existing `lerpBlend` so the normalisation rules
+  // already enforced upstream stay consistent.
+  const target =
+    inputs.policyTarget && inputs.policyTarget.size > 0
+      ? lerpBlend(shrunk, inputs.policyTarget, POLICY_BLEND_WEIGHT)
+      : shrunk
   const applied = slew(inputs.previousApplied, target)
   return {
     crowdRaw,
