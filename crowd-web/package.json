@@ -3,5 +3,15 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Crowd-facing phone PWA for the collective DJ layer (docs/collective/PLAN.md §7). Phase 0 scaffold — empty room landing only. Phase 1 introduces a TypeScript + bundler stack."
+  "description": "Crowd-facing phone PWA for the collective DJ layer (docs/collective/PLAN.md §7). Phase 1 introduces the Vite + TypeScript stack and the Now + onboarding screens. Vibes (the Pol.is card stack) is stubbed; the seams land in Phase 2.",
+  "scripts": {
+    "build": "vite build --base=/crowd/",
+    "dev": "vite",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "~5.6.3",
+    "vite": "^7.0.0"
+  }
 }
