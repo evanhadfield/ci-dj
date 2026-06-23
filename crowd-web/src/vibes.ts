@@ -219,9 +219,24 @@ export class VibesScreen {
 
     const actions = document.createElement('div')
     actions.className = 'vibes__actions'
-    const disagree = makeActionButton('disagree', STRINGS.vibes.disagree, () => this.commitVote(card.id, -1))
-    const pass = makeActionButton('pass', STRINGS.vibes.pass, () => this.commitVote(card.id, 0))
-    const agree = makeActionButton('agree', STRINGS.vibes.agree, () => this.commitVote(card.id, 1))
+    const disagree = makeActionButton(
+      'disagree',
+      STRINGS.vibes.disagreeEmoji,
+      STRINGS.vibes.disagree,
+      () => this.commitVote(card.id, -1),
+    )
+    const pass = makeActionButton(
+      'pass',
+      STRINGS.vibes.passEmoji,
+      STRINGS.vibes.pass,
+      () => this.commitVote(card.id, 0),
+    )
+    const agree = makeActionButton(
+      'agree',
+      STRINGS.vibes.agreeEmoji,
+      STRINGS.vibes.agree,
+      () => this.commitVote(card.id, 1),
+    )
     actions.append(disagree, pass, agree)
     wrapper.append(actions)
 
@@ -236,6 +251,11 @@ export class VibesScreen {
 
     const start = (event: PointerEvent): void => {
       if (event.button !== 0 && event.pointerType !== 'touch') return
+      // A pointerdown on a button inside the card must not steal the
+      // pointer — otherwise the card's setPointerCapture eats the
+      // click before it reaches the action handler.
+      const target = event.target
+      if (target instanceof HTMLElement && target.closest('button')) return
       dragging = true
       startX = event.clientX
       startY = event.clientY
@@ -338,13 +358,16 @@ export class VibesScreen {
 
 function makeActionButton(
   kind: 'agree' | 'pass' | 'disagree',
-  label: string,
+  glyph: string,
+  ariaLabel: string,
   onClick: () => void,
 ): HTMLButtonElement {
   const button = document.createElement('button')
   button.type = 'button'
   button.className = `vibes__action vibes__action--${kind}`
-  button.textContent = label
+  button.textContent = glyph
+  // Glyph is decorative; screen-readers + assistive tech read the label.
+  button.setAttribute('aria-label', ariaLabel)
   button.addEventListener('click', onClick)
   return button
 }

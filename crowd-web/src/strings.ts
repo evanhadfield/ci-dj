@@ -42,9 +42,14 @@ export const STRINGS = {
     waitingForCards: 'Pulling cards from the room…',
     progress: 'rated {n} — keep going?',
     progressFirst: 'first one in — keep going?',
+    /** Accessibility labels — screen-readers announce these while the
+     * visible button shows just the emoji glyph below. */
     agree: 'Agree',
     pass: 'Pass',
     disagree: 'Disagree',
+    agreeEmoji: '👍',
+    passEmoji: '🤷',
+    disagreeEmoji: '👎',
     suggestEyebrow: 'Suggest a vibe',
     suggestPlaceholder: 'short description, like "warm sunset disco"',
     suggestSubmit: 'Suggest',

@@ -574,8 +574,13 @@ button:focus-visible {
   border: 1px solid var(--line);
   background: var(--bg-elev);
   color: var(--fg);
-  font-size: 0.95rem;
-  min-height: 52px;
+  font-size: 1.6rem;
+  line-height: 1;
+  min-height: 56px;
+  /* The emoji is the affordance; let it scale fully without baseline drift. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .vibes__action--agree {
