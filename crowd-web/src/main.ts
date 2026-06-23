@@ -45,6 +45,17 @@ let pendingSeedText: string | null = stored.pendingSeedText ?? null
  * only if it was user-initiated. */
 const silentSuggestQueue: string[] = []
 
+// The connection is declared up here, ahead of the screens, because the
+// VibesScreen constructor prefetches the first card deal synchronously
+// (via its onRequestCards handler). With `connection` declared further
+// down the file, that handler would hit the temporal-dead-zone and
+// throw, leaving the page wedged on "Joining the room…".
+const wsBase = window.location.origin.replace(/^http/, 'ws')
+const connection = new PhoneConnection(`${wsBase}/ws/phone?code=${encodeURIComponent(code)}`, {
+  onState: handleConnectionState,
+  onMessage: handleMessage,
+})
+
 const nowScreen = new NowScreen({
   onLike: () => {
     connection.send({ type: 'react', sign: 1 })
@@ -268,11 +279,5 @@ function startOnboarding(): void {
     },
   })
 }
-
-const wsBase = window.location.origin.replace(/^http/, 'ws')
-const connection = new PhoneConnection(`${wsBase}/ws/phone?code=${encodeURIComponent(code)}`, {
-  onState: handleConnectionState,
-  onMessage: handleMessage,
-})
 
 connection.start()
