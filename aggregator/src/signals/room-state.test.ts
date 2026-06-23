@@ -136,6 +136,33 @@ describe('RoomSignalsState', () => {
     assert.ok(freshTop > downvotedTop, `fresh ${freshTop} should beat downvoted ${downvotedTop}`)
   })
 
+  it('feeds Vibes-tab agree votes into the policy target below CLUSTER_MIN_N', () => {
+    // Regression: a small room (well under the 18-voter cluster gate)
+    // suggests `bluegrass`, both phones 👍 it from the Vibes tab, but
+    // never tap on the Now screen. The deck target should still
+    // include `bluegrass` — Phase 3 synthesises a whole-room cluster
+    // and runs the centroid policy on it so card-stack votes flow
+    // into the explicit stream without needing a Now-screen tap.
+    const state = new RoomSignalsState(0)
+    state.seat('u1', 0)
+    state.seat('u2', 0)
+    state.castVote('u1', 'hard-techno', 1, 100)
+    state.castVote('u2', 'hard-techno', 1, 110)
+    state.tick(1000)
+    const snapshot = state.snapshot()
+    assert.equal(snapshot.clusters.length, 0, 'cluster gate not crossed — wire stays single-organism')
+    assert.ok(snapshot.policy.centroid.size > 0, 'centroid blend should be non-empty')
+    assert.ok(
+      snapshot.policy.centroid.has('hard-techno'),
+      'card-stack agree-vote should land in the centroid blend',
+    )
+    // The composed target picks it up too (the pipeline mixes shrunk
+    // taste-EWMA with the policy at POLICY_BLEND_WEIGHT — with no
+    // reactions, shrunk collapses to the uniform prior, so the policy
+    // visibly pushes the target away from uniform).
+    assert.ok((snapshot.target.get('hard-techno') ?? 0) > 1 / 9 / 2)
+  })
+
   it('eventually retires a prompt when the applied vibe matches its embedding', () => {
     const state = new RoomSignalsState(0)
     state.seat('u1', 0)

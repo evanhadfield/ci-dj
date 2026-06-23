@@ -549,7 +549,14 @@ export function computePolicies(
   const rotationWindow = Math.max(1, options.rotationWindow ?? DEFAULT_ROTATION_WINDOW)
   const topK = Math.max(1, options.topK ?? DEFAULT_POLICY_TOPK)
   const weights = options.promptWeights
-  const effective = clusters.filter((c) => c.size >= POLICY_MIN_CLUSTER_SIZE)
+  // The size floor is only meaningful with ≥ 2 clusters — there it
+  // filters noise (a lone outlier in a discovered cluster). With a
+  // single cluster (e.g. the synthetic whole-room cluster the room
+  // injects below `CLUSTER_MIN_N`) we use it as-is; otherwise small
+  // rooms collapse the policy to an empty blend and the deck stops
+  // hearing card-stack votes.
+  const effective =
+    clusters.length <= 1 ? clusters : clusters.filter((c) => c.size >= POLICY_MIN_CLUSTER_SIZE)
   const centroid = centroidBlend(effective, weights, topK)
   const pr = prBlend(effective, options.rotationTick ?? 0, rotationWindow, weights, topK)
   const maximin = maximinBlend(effective, weights, topK)

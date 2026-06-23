@@ -330,7 +330,16 @@ export class RoomSignalsState {
     this.lastClusters = clustering.clusters
     this.lastOutliers = clustering.outlierDistances
     const promptWeights = this.computePromptSupport()
-    this.lastPolicy = computePolicies(this.lastClusters, {
+    // Below `CLUSTER_MIN_N` discovery returns no clusters, but the
+    // matrix still has opinion data — card-stack agree-votes should
+    // flow into the deck target even with two phones in the room.
+    // We synthesise a single "whole-room" cluster from the matrix and
+    // feed it to the policy. `lastClusters` stays empty so the host-
+    // screen keeps single-organism rendering (the split-ring layer
+    // needs ≥ 2 clusters to read).
+    const policyClusters =
+      this.lastClusters.length > 0 ? this.lastClusters : this.wholeRoomCluster()
+    this.lastPolicy = computePolicies(policyClusters, {
       choice: this.policyChoice,
       rotationTick: this.tickCount,
       promptWeights,
@@ -418,6 +427,38 @@ export class RoomSignalsState {
     if (top.length === 0) return null
     const prompt = this.pool.get(top[0]!.id)
     return prompt?.embedding ?? null
+  }
+
+  /** Single cluster spanning every active voter — the policy fallback
+   * when `clusterMatrix()` is below `CLUSTER_MIN_N`. Returns `[]` when
+   * the matrix has no votes (e.g. a brand-new room) so the pipeline
+   * cleanly collapses to the taste-only path. */
+  private wholeRoomCluster(): readonly OpinionCluster[] {
+    const rows = this.matrix.rows()
+    const members: string[] = []
+    const sums = new Map<VibePromptId, number>()
+    const counts = new Map<VibePromptId, number>()
+    for (const [userId, row] of rows) {
+      if (row.size === 0) continue
+      members.push(userId)
+      for (const [promptId, vote] of row) {
+        sums.set(promptId, (sums.get(promptId) ?? 0) + vote)
+        counts.set(promptId, (counts.get(promptId) ?? 0) + 1)
+      }
+    }
+    if (members.length === 0) return []
+    const meanVotes = new Map<VibePromptId, number>()
+    for (const [promptId, sum] of sums) {
+      const count = counts.get(promptId) ?? 0
+      if (count === 0) continue
+      meanVotes.set(promptId, sum / count)
+    }
+    return [{
+      id: 'c0',
+      size: members.length,
+      meanVotes,
+      members: members.sort(),
+    }]
   }
 
   private computeClusterMass(

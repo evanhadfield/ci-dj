@@ -44,6 +44,7 @@ const INITIAL_STATUS: BridgeStatus = {
 
 export function useCollectiveBridge(influence: CrowdInfluence): BridgeStatus {
   const influenceRef = useRef(influence)
+  const bridgeRef = useRef<CollectiveBridge | null>(null)
   // The bridge's gate (bridge.ts) reads `influenceRef.current` whenever
   // an intent arrives. Writing the ref in an effect (not in render)
   // satisfies React's "no side-effects in render" rule; the effect runs
@@ -53,12 +54,21 @@ export function useCollectiveBridge(influence: CrowdInfluence): BridgeStatus {
   useEffect(() => {
     influenceRef.current = influence
   }, [influence])
+  // Phase 3 §6: keep the aggregator's stored policy choice in sync
+  // with the panel's. A click on InfluencePanel sends `policy_select`
+  // immediately, but if the bridge socket was briefly closed at click
+  // time the message silently drops. This effect re-sends whenever
+  // `influence.policy` changes; the bridge itself also re-sends on
+  // every `open`, so the two paths together close any window where
+  // the panel and server could disagree.
+  useEffect(() => {
+    bridgeRef.current?.selectPolicy(influence.policy)
+  }, [influence.policy])
   const [status, setStatus] = useState<BridgeStatus>(INITIAL_STATUS)
 
   useEffect(() => {
     if (!isCollectiveEnabled()) return
     let cancelled = false
-    let bridge: CollectiveBridge | null = null
     const url = aggregatorUrl()
 
     fetch(`${url.replace(/\/$/, '')}/api/rooms/active`)
@@ -68,7 +78,7 @@ export function useCollectiveBridge(influence: CrowdInfluence): BridgeStatus {
       })
       .then((room) => {
         if (cancelled) return
-        bridge = new CollectiveBridge({
+        const bridge = new CollectiveBridge({
           aggregatorUrl: url,
           roomCode: room.code,
           token: bridgeToken(),
@@ -76,7 +86,8 @@ export function useCollectiveBridge(influence: CrowdInfluence): BridgeStatus {
           onState: (state) => setStatus((s) => ({ ...s, bridge: state })),
           onIntent: (intent) => setStatus((s) => ({ ...s, intent })),
         })
-        const selectPolicy: BridgeStatus['selectPolicy'] = (choice) => bridge?.selectPolicy(choice)
+        bridgeRef.current = bridge
+        const selectPolicy: BridgeStatus['selectPolicy'] = (choice) => bridge.selectPolicy(choice)
         setStatus((s) => ({ ...s, room, selectPolicy }))
         bridge.start()
       })
@@ -89,7 +100,8 @@ export function useCollectiveBridge(influence: CrowdInfluence): BridgeStatus {
 
     return () => {
       cancelled = true
-      bridge?.stop()
+      bridgeRef.current?.stop()
+      bridgeRef.current = null
     }
   }, [])
 
