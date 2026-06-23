@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "NODE_OPTIONS=--experimental-require-module vitest run"
   },
   "dependencies": {
     "i18next": "^26.3.1",
