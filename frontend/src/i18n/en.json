@@ -237,6 +237,8 @@
       "title": "Crowd influence",
       "amount": "Influence",
       "lock": "Lock for the drop",
+      "collapse": "Hide crowd panel",
+      "expand": "Show crowd panel",
       "policy": "Policy",
       "policyChoice": {
         "auto": "Auto",
