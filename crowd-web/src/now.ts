@@ -21,6 +21,7 @@ const FLASH_MS = 700
 export class NowScreen {
   private readonly root: HTMLElement
   private readonly labelEl: HTMLElement
+  private readonly supportingEl: HTMLElement
   private readonly shiftingEl: HTMLElement
   private readonly gaugeFill: HTMLElement
   private readonly likeBtn: HTMLButtonElement
@@ -42,12 +43,20 @@ export class NowScreen {
     this.labelEl.className = 'now__label'
     this.labelEl.id = 'now-label'
     this.labelEl.textContent = STRINGS.now.waiting
+    /** Phase 1's `describeBlend` joins the top-3 vibes with " · ". Rendering
+     * the whole join in the headline reads like a list — easy to confuse
+     * with the Room tab's vibe map. We split here so the primary vibe owns
+     * the headline and the rest sits underneath as supporting flavour. The
+     * Phase 2 NLP synthesis can return a single phrase and this code
+     * gracefully degrades to "primary only". */
+    this.supportingEl = document.createElement('p')
+    this.supportingEl.className = 'now__supporting'
     this.shiftingEl = document.createElement('p')
     this.shiftingEl.className = 'now__shifting'
     this.shiftingEl.setAttribute('role', 'status')
     this.shiftingEl.setAttribute('aria-live', 'polite')
     this.shiftingEl.textContent = STRINGS.now.shifting
-    heading.append(eyebrow, this.labelEl, this.shiftingEl)
+    heading.append(eyebrow, this.labelEl, this.supportingEl, this.shiftingEl)
     this.root.append(heading)
 
     const gauge = document.createElement('div')
@@ -95,7 +104,10 @@ export class NowScreen {
   }
 
   update(state: NowState): void {
-    this.labelEl.textContent = state.label || STRINGS.now.waiting
+    const { primary, supporting } = splitLabel(state.label)
+    this.labelEl.textContent = primary || STRINGS.now.waiting
+    this.supportingEl.textContent = supporting
+    this.supportingEl.classList.toggle('now__supporting--on', supporting.length > 0)
     this.shiftingEl.classList.toggle('now__shifting--on', state.shifting)
     const clamped = Math.max(-1, Math.min(1, state.temperature))
     if (clamped >= 0) {
@@ -124,6 +136,17 @@ export class NowScreen {
     for (const id of this.flashTimers) clearTimeout(id)
     this.root.remove()
   }
+}
+
+/** Pull the primary vibe out of `describeBlend`'s " · "-joined string and
+ * return the rest as a softer supporting phrase. A single-chunk or empty
+ * label yields no supporting text — the renderer then collapses that line. */
+function splitLabel(label: string): { primary: string; supporting: string } {
+  if (!label) return { primary: '', supporting: '' }
+  const parts = label.split(' · ').map((p) => p.trim()).filter(Boolean)
+  const primary = parts[0] ?? ''
+  const supporting = parts.slice(1).join(', ')
+  return { primary, supporting }
 }
 
 function makeReactionButton(

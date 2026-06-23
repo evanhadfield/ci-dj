@@ -172,6 +172,19 @@ button:focus-visible {
   min-height: 1.5em;
 }
 
+.now__supporting {
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin: 0;
+  min-height: 1.2em;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.now__supporting--on {
+  opacity: 1;
+}
+
 .now__shifting {
   color: var(--accent);
   font-size: 0.9rem;
