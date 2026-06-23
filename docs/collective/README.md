@@ -12,8 +12,8 @@ deck restyle), jump to [**Running Phase 1 locally**](#running-phase-1-locally)
 | ----- | -------------------------------------------------------------- | -------- |
 | 0     | Seams: `/api/embed`, room codes + QR, transport/identity ifaces | **Done** |
 | 1     | Reactive backbone — phone taps drive the deck via the bridge    | **Done** |
-| 2     | Proactive: Pol.is card stack + suggestions                      | Next     |
-| 3     | Clustering + social-choice policy (PR / maximin)                | Pending  |
+| 2     | Proactive: Pol.is card stack + suggestions + semantic dedupe    | **Done** |
+| 3     | Clustering + social-choice policy (PR / maximin)                | Next     |
 | 4     | v2 seams + hardening (LAN identity, persistence, moderation)    | Pending  |
 
 Hand off to the next phase by passing the repo + `PROMPT.md` to a fresh
@@ -78,6 +78,56 @@ What is still stubbed (the seams for Phase 2+):
   cluster split-ring — Phase 3 lights up the same nodes.
 - `aggregator/control/transport.ts`: `McpTransport` stays a loud stub;
   ADR-0020 remains Proposed.
+
+## Phase 2 — what landed
+
+- **`aggregator/signals/prompts.ts`** — `VibePromptPool` per PLAN.md §4:
+  `{ id, text, embedding(768), support, lastVoteTs, satisfied,
+  approved }`, seeded from the Phase 1 catalog. `suggest()` runs a
+  cheap exact-text match, then (when the embed client is wired)
+  semantic dedupe via cosine ≥ ε on the backend's `/api/embed` 768-dim
+  vectors; the `sweep()` step decays stale support and retires
+  prompts whose embedding catches up to the applied vibe.
+- **`aggregator/signals/opinion-matrix.ts`** — sparse user × prompt
+  votes in `{+1, 0, -1}` with Wilson-lower-bound support scoring. The
+  shape Phase 3's PCA + K-means consumes.
+- **`aggregator/signals/embed.ts`** — `HttpEmbedClient` against
+  `controller.py`'s `/api/embed`; gracefully returns `null` when the
+  backend is unreachable (suggestion still lands; dedupe just skips).
+- **WS protocol extended** — phones can now `suggest`, `vote`, and
+  `request_cards`; the aggregator answers with `suggest_ack` and
+  `cards` (the coverage-balanced deal, least-shown-first with a tiny
+  random jitter). Wire shapes in `aggregator/src/signals/messages.ts`
+  ↔ `crowd-web/src/types.ts`.
+- **`crowd-web/`** — the Vibes tab replaces the Phase 1 placeholder
+  with a real card stack (swipe + button parity per §7b
+  accessibility), a "rated N — keep going?" progress line, and a
+  Suggest a Vibe form. The onboarding `pendingSeedText` drains into
+  the suggest path on first connect — the Phase 1 "others can vote on
+  it soon" pill copy now reflects reality.
+- **`host-screen/`** — the vibe map now sizes circles by Phase 2's
+  Wilson `VibePrompt.support` (the host handler resolves labels
+  through the prompt pool, so user-suggested vibes render with their
+  own text). Still single-organism mode — clusters land in Phase 3.
+- **Tooling pass** — `just check` runs `aggregator npm test` (80
+  passing) + `aggregator npm run typecheck` + `crowd-web npx tsc
+  --noEmit` alongside the existing backend/frontend/Rust gates. The
+  Phase 1 vitest regression (`jsdom@29` requiring the now-ESM
+  `@exodus/bytes/encoding-lite.js`) is fixed by adding
+  `--experimental-require-module` to the frontend's `npm test` so
+  Node 22.9 honours the `require(esm)` path 22.12 ships by default.
+
+What is still stubbed (the seams for Phase 3+):
+
+- `aggregator/signals/clusters.ts`: `clusterStub()` returns no
+  clusters and the `centroid` policy — Phase 3 lands PCA + K-means
+  here and the `pr` / `maximin` selector wires through the same shape.
+- `aggregator/signals/moderation.ts`: `autoApproveClassifier` lets
+  every suggestion through; the DJ approve/veto lane is still the
+  v1 moderation lever (the `RoomStubs.moderationQueue` shape exists,
+  the classifier doesn't).
+- Per-vibe cluster sentiment on the host-screen map (split rings /
+  mini-bars) waits for the cluster fan-out in Phase 3.
 
 ## Running Phase 1 locally
 
@@ -192,31 +242,31 @@ With both terminals up and a phone joined:
 ## Tests + lint
 
 ```sh
-cd aggregator && npm test          # 46/46 pass (incl. WS end-to-end)
-cd aggregator && npm run typecheck # clean
-cd crowd-web  && npx tsc --noEmit  # clean
+just check                          # full PR gate (incl. aggregator + crowd-web)
+cd aggregator && npm test           # 80/80 pass (incl. WS suggest/vote end-to-end)
+cd aggregator && npm run typecheck  # clean
+cd crowd-web  && npx tsc --noEmit   # clean
 cd frontend   && npx tsc -p tsconfig.app.json --noEmit  # clean
-cd frontend   && npm run lint      # clean
+cd frontend   && npm run lint       # clean
+cd frontend   && npm test           # 579 pass + 1 skipped under jsdom 29
 ```
 
-`just check` is not yet wired to the aggregator's `npm test` (the
-Phase 0 README flagged this). Phase 2's tooling pass should fold it in
-along with `crowd-web`'s typecheck. The Phase 1 aggregator + bridge
-test suites pass standalone and are documented above.
+The frontend `npm test` script now sets
+`NODE_OPTIONS=--experimental-require-module` so the `require(esm)`
+path Node 22.12+ ships by default is honoured on Node 22.9 too. With
+that flag the Phase 1 jsdom 29 / `@exodus/bytes` regression is gone
+and vitest runs the full pool — including the new Vibes-screen
+surface.
 
-**Pre-existing**: `cd frontend && npm test` is broken on `main`
-independently of this work — `jsdom@29.1.1` pulls
-`html-encoding-sniffer@6.0.0` which `require()`s the now-ESM
-`@exodus/bytes/encoding-lite.js`. Running the new `bridge.test.ts`
-with `--environment=node` (it doesn't need jsdom) sidesteps it:
-`npm test -- --environment=node src/collective/bridge.test.ts` → 6/6.
-Phase 2 should bump jsdom or pin a compatible
-`html-encoding-sniffer`.
+## Phase 3 — next session
 
-## Phase 2 — next session
-
-The Phase 2 brief lives in [`PROMPT.md`](../../PROMPT.md). Start a
+The Phase 3 brief lives in [`PROMPT.md`](../../PROMPT.md). Start a
 fresh Claude Code session in this repo, hand it that prompt, and it
-will execute Phase 2 against the seams above (the Pol.is card stack,
-suggestions, semantic dedupe through `/api/embed`, host-screen top-K
-vibe map).
+will execute Phase 3 against the seams above:
+
+- `aggregator/signals/clusters.ts` is where PCA + K-means + the
+  `pr`/`maximin` policy selector land.
+- `host-screen/main.js` is where the per-vibe cluster split-ring /
+  mini-bar render lands (the support sizing is already there).
+- `aggregator/signals/moderation.ts` is where Phase 4's classifier
+  hook will sit when v2 hardening lands.
