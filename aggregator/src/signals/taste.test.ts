@@ -25,9 +25,11 @@ describe('applySeedPicks', () => {
     assert.equal(seeded.liked.get('deep-house'), 1)
   })
 
-  it('ignores unknown ids without throwing', () => {
-    const seeded = applySeedPicks(emptyTasteState(0), ['not-a-vibe'], 0)
-    assert.equal(seeded.liked.size, 0)
+  it('trusts the caller to pre-validate ids (Phase 2 unified pool)', () => {
+    // Phase 2 ids may be user-submitted (`user-…`) not just the seed
+    // catalog — the membership check moved up to RoomSignalsState.
+    const seeded = applySeedPicks(emptyTasteState(0), ['user-bluegrass'], 0)
+    assert.equal(seeded.liked.get('user-bluegrass'), 1)
   })
 })
 

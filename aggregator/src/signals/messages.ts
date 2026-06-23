@@ -2,7 +2,6 @@
  * (docs/collective/PLAN.md §3, §7). Kept in one place so a stale crowd-
  * web or host-screen build can be diffed against the aggregator. */
 
-import type { VibePrompt as SeedVibePrompt } from './vibes.js'
 
 /** A card-stack item served to the phone (PLAN.md §7b Vibes screen).
  * The aggregator deals the least-shown prompts first, lightly
@@ -44,10 +43,13 @@ export type PhoneServerMessage =
       type: 'welcome'
       userId: string
       sessionToken: string
-      /** The seed catalog — same shape Phase 1 sent. The phone uses
-       * this for the onboarding pick-3; Phase 2's Vibes screen pulls
-       * its card stack from `cards` messages instead. */
-      vibes: readonly SeedVibePrompt[]
+      /** Phase 2: cards dealt from the unified prompt pool via the
+       * Thompson sampler — same shape and same surfacing algorithm
+       * the Vibes-tab card stack uses, just sized for the onboarding
+       * "tap 3" grid. User-submitted prompts can land here too, so a
+       * `bluegrass` submission visible to one phone shows up on the
+       * next joiner's onboarding screen. */
+      vibes: readonly VibeCard[]
       seeded: boolean
     }
   | {

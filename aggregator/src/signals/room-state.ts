@@ -26,6 +26,7 @@ import { tick, type PipelineOutputs } from './pipeline.js'
 import { type VibePromptId } from './vibes.js'
 import { VibePromptPool, type SuggestResult, type VibePrompt } from './prompts.js'
 import { OpinionMatrix, type Vote } from './opinion-matrix.js'
+import { recencyBonus, sampleBeta, type RandomFn } from './sampling.js'
 import type { EmbedClient } from './embed.js'
 import type { VibeCard } from './messages.js'
 
@@ -33,13 +34,13 @@ import type { VibeCard } from './messages.js'
  * the slew limiter (§5.8) time to look like drift, not jitter. */
 export const TICK_INTERVAL_MS = 1500
 
-/** Default size of a card deal. The phone re-requests when it runs low. */
+/** Default size of a card deal for the Vibes tab. The phone re-
+ * requests when it runs low. */
 export const DEFAULT_CARD_LIMIT = 12
 
-/** When the active pool is small the dealer rotates through it from
- * least-seen first; a tiny shuffle slot keeps two phones from getting
- * identical decks. */
-export const CARD_RANDOM_JITTER = 0.001
+/** Size of the onboarding "tap 3" deal — the welcome message hands
+ * the phone exactly this many cards drawn from the unified pool. */
+export const ONBOARDING_CARD_LIMIT = 9
 
 export type RoomSignals = {
   applied: VibeBlend
@@ -78,6 +79,9 @@ export type RoomStubs = {
 
 export type RoomStateOptions = {
   embedClient?: EmbedClient
+  /** Override the dealer's RNG. Production uses `Math.random`; tests
+   * inject a seeded PRNG (Mulberry32) for deterministic deal orders. */
+  random?: RandomFn
 }
 
 export class RoomSignalsState {
@@ -91,17 +95,17 @@ export class RoomSignalsState {
   private readonly pool: VibePromptPool
   private readonly matrix = new OpinionMatrix()
   private readonly embedClient: EmbedClient | null
-  /** Per-user "cards dealt so far this session" — used to keep the
-   * coverage-balanced dealer from re-dealing the same card to the
-   * same phone unless we've exhausted the pool (PLAN.md §7b). */
+  private readonly random: RandomFn
+  /** Per-user "cards dealt so far this session" — Phase 2 still
+   * filters dealt cards so a user doesn't see the same prompt twice
+   * in their stack (the Thompson sampler is independent of this set). */
   private readonly dealtBy = new Map<string, Set<VibePromptId>>()
-  /** Per-prompt deal count, drives the least-shown-first deal order. */
-  private readonly dealtCount = new Map<VibePromptId, number>()
 
   constructor(now: number = Date.now(), options: RoomStateOptions = {}) {
     this.temperature = emptyTemperature(now)
     this.pool = new VibePromptPool(now)
     this.embedClient = options.embedClient ?? null
+    this.random = options.random ?? Math.random
   }
 
   /** Seat a phone. Idempotent — a reconnect with the same `userId`
@@ -112,19 +116,26 @@ export class RoomSignalsState {
     }
   }
 
-  /** Apply the onboarding pick-3 (§7b). The picks also land as +1
-   * agree votes on the corresponding prompts so the Phase 2 host-
-   * screen vibe map shows non-zero support immediately — PLAN.md §1
-   * signal 3: "seeds a taste vector + casts 3 first votes." */
+  /** Apply the onboarding pick-3 (§7b). Phase 2 unifies onboarding
+   * with the Vibes-tab card stack: picks may now be user-submitted
+   * prompts, not just the seed catalog. Each accepted pick lands as:
+   *
+   *   - +1 mass on the user's taste vector — so it influences the
+   *     deck blend through the pipeline (PLAN.md §5.7 "Suggestions
+   *     inject vocabulary the audio can't imply").
+   *   - +1 agree vote on the OpinionMatrix — so the host-screen vibe
+   *     map and the Thompson dealer see fresh support immediately.
+   *
+   * Unknown ids are dropped at this boundary; the inner taste helper
+   * trusts its input. */
   applySeed(userId: string, picks: readonly VibePromptId[], now: number = Date.now()): void {
     const state = this.tastes.get(userId) ?? emptyTasteState(now)
-    this.tastes.set(userId, applySeedPicks(state, picks, now))
-    for (const id of picks) {
-      if (this.pool.get(id)) {
-        this.matrix.vote(userId, id, 1, now)
-        const summary = this.matrix.summary(id)
-        this.pool.setSupport(id, summary.support, now)
-      }
+    const valid = picks.filter((id) => this.pool.get(id) !== null)
+    this.tastes.set(userId, applySeedPicks(state, valid, now))
+    for (const id of valid) {
+      this.matrix.vote(userId, id, 1, now)
+      const summary = this.matrix.summary(id)
+      this.pool.setSupport(id, summary.support, now)
     }
   }
 
@@ -168,21 +179,50 @@ export class RoomSignalsState {
     return { ok: true }
   }
 
-  /** Coverage-balanced card deal for the Phase 2 Vibes screen. Picks
-   * the least-globally-shown active prompts the user hasn't already
-   * voted on, with a small random jitter so two phones don't get
-   * identical decks (PLAN.md §7b). */
-  dealCards(userId: string, limit: number = DEFAULT_CARD_LIMIT): VibeCard[] {
+  /** Deal cards from the unified pool to a phone. Used by both the
+   * onboarding "tap 3" screen (via `welcome`) and the Vibes-tab card
+   * stack (via `request_cards`).
+   *
+   * Surfacing algorithm — Thompson sampling on Beta(α, β) with a
+   * linear recency bonus (`signals/sampling.ts`):
+   *
+   *   - α = agree + 0.5·pass + 1   (Laplace prior, passes count half)
+   *   - β = disagree + 0.5·pass + 1
+   *   - score = sampleBeta(α, β) + recencyBonus(age)
+   *
+   * Sorting by `score` descending gives a stochastic order that
+   * prefers high-agreement prompts on average but always leaves room
+   * for exploration — no "top-K trap", downvoted prompts naturally
+   * sink, and fresh suggestions can rise rapidly if their first few
+   * votes are positive. Tests pin the distribution; production runs
+   * Math.random.
+   *
+   * The per-user dealt-set still filters out prompts the user has
+   * already seen this session, so the stack never repeats. */
+  dealCards(
+    userId: string,
+    limit: number = DEFAULT_CARD_LIMIT,
+    options: { markDealt?: boolean; now?: number } = {},
+  ): VibeCard[] {
+    const now = options.now ?? Date.now()
+    // `markDealt` defaults to true for the Vibes-tab card stack (so a
+    // mid-stack re-request doesn't re-serve unvoted cards). The
+    // onboarding welcome path passes `false`: a card glanced at in
+    // the picker but not chosen is still fair game for the Vibes tab.
+    const markDealt = options.markDealt ?? true
     const seen = this.dealtBy.get(userId) ?? new Set<VibePromptId>()
     const active = this.pool.active()
     const candidates = active.filter((p) => !seen.has(p.id))
     const ordered = candidates
-      .map((p) => ({
-        prompt: p,
-        // Least-shown-first + tiny jitter; ties resolve randomly.
-        score: (this.dealtCount.get(p.id) ?? 0) + Math.random() * CARD_RANDOM_JITTER,
-      }))
-      .sort((a, b) => a.score - b.score)
+      .map((p) => {
+        const summary = this.matrix.summary(p.id)
+        const alpha = summary.agree + 0.5 * summary.pass + 1
+        const beta = summary.disagree + 0.5 * summary.pass + 1
+        const sample = sampleBeta(alpha, beta, this.random)
+        const age = Math.max(0, now - p.createdAt)
+        return { prompt: p, score: sample + recencyBonus(age) }
+      })
+      .sort((a, b) => b.score - a.score)
       .slice(0, Math.max(1, limit))
     const cards: VibeCard[] = []
     for (const { prompt } of ordered) {
@@ -192,10 +232,17 @@ export class RoomSignalsState {
         label: prompt.label,
         voteCount: summary.agree + summary.disagree + summary.pass,
       })
-      this.dealtCount.set(prompt.id, (this.dealtCount.get(prompt.id) ?? 0) + 1)
-      this.markDealt(userId, prompt.id)
+      if (markDealt) this.markDealt(userId, prompt.id)
     }
     return cards
+  }
+
+  /** Resolve the `set_style` text for a prompt id. The deck worker
+   * accepts arbitrary text (it embeds via MusicCoCa), so user-
+   * submitted prompts like `bluegrass` flow through unchanged — they
+   * just need a valid lookup, not a seed-catalog entry. */
+  promptText(id: VibePromptId): string | null {
+    return this.pool.get(id)?.text ?? null
   }
 
   /** Run one aggregation tick and return the new signals snapshot.

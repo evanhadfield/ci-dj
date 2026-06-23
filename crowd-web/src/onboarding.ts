@@ -15,18 +15,21 @@
  * `seedText` so Phase 2 can promote it; the pill copy says so. */
 
 import { STRINGS } from './strings.ts'
-import type { VibePrompt } from './types.ts'
+import type { VibeCard } from './types.ts'
 
 export type OnboardingResult = {
   picks: string[]
-  /** Free-text seed or chip selection (PLAN.md §7b). Phase 1 stores
-   * this client-side only; Phase 2 sends it to /api/embed for semantic
-   * dedupe and adds it to the vibe-prompt pool. */
+  /** Free-text seed or chip selection (PLAN.md §7b). Phase 2 routes
+   * this through the same `suggest` path the Vibes tab uses — the
+   * server semantic-dedupes it via /api/embed and adds it to the
+   * unified vibe-prompt pool. */
   seedText: string
 }
 
 export type OnboardingOptions = {
-  vibes: VibePrompt[]
+  /** Cards dealt by the aggregator (Thompson-sampled from the
+   * unified pool). User-submitted prompts surface here too. */
+  vibes: VibeCard[]
   onSubmit: (result: OnboardingResult) => void
   onSkip: () => void
 }

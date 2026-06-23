@@ -8,7 +8,7 @@
  * anyone — the cap is bounded magnitude per window, not per tap. */
 
 import type { VibeBlend } from './blend.js'
-import { SEED_VIBES, type VibePromptId } from './vibes.js'
+import type { VibePromptId } from './vibes.js'
 
 /** EWMA half-life for a user's taste vector. Closer to the music's
  * natural reaction phrase (PLAN.md §5 closing note) than to a single
@@ -52,8 +52,13 @@ export function emptyTasteState(now: number): TasteState {
 /** Seed a fresh user from their onboarding "pick 3" — each pick lands
  * one bounded unit on the liked side, so the room sees their first
  * three votes the moment they finish onboarding (PLAN.md §1 signal 3,
- * §7b onboarding overlay). Unknown ids are ignored, not rejected: a
- * stale crowd-web build shouldn't 500 the join. */
+ * §7b onboarding overlay).
+ *
+ * Phase 2: the picks may now be user-suggested prompts (not just the
+ * seed catalog), so the membership check moved out to the caller —
+ * `RoomSignalsState` validates against the live prompt pool and only
+ * forwards real ids. A stale crowd-web build still can't 500 the join
+ * because the caller drops unknown ids before they reach us. */
 export function applySeedPicks(
   state: TasteState,
   picks: readonly VibePromptId[],
@@ -61,7 +66,6 @@ export function applySeedPicks(
 ): TasteState {
   const liked = new Map(state.liked)
   for (const id of picks) {
-    if (!SEED_VIBES.some((v) => v.id === id)) continue
     liked.set(id, (liked.get(id) ?? 0) + 1)
   }
   return { ...state, liked, updatedAt: now }

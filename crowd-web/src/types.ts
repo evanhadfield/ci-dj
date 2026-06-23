@@ -32,7 +32,10 @@ export type PhoneServerMessage =
       type: 'welcome'
       userId: string
       sessionToken: string
-      vibes: VibePrompt[]
+      /** Phase 2: cards dealt from the unified pool by the same
+       * Thompson sampler the Vibes tab uses. Onboarding renders these
+       * directly — user-submitted prompts can land here. */
+      vibes: VibeCard[]
       seeded: boolean
     }
   | {

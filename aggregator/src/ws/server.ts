@@ -14,8 +14,11 @@ import { WebSocketServer, WebSocket } from 'ws'
 import { describeBlend } from '../signals/label.js'
 import { topKEntries } from '../signals/blend.js'
 import { cosineDistance } from '../signals/blend.js'
-import { RoomSignalsState, TICK_INTERVAL_MS } from '../signals/room-state.js'
-import { SEED_VIBES, SEED_VIBE_BY_ID } from '../signals/vibes.js'
+import {
+  RoomSignalsState,
+  TICK_INTERVAL_MS,
+  ONBOARDING_CARD_LIMIT,
+} from '../signals/room-state.js'
 import type {
   BridgeServerMessage,
   HostServerMessage,
@@ -66,8 +69,11 @@ class RoomBundle {
       this.previousAppliedForShift = new Map(snapshot.applied)
       const prompts = topKEntries(snapshot.applied)
         .map(({ id, weight }) => {
-          const vibe = SEED_VIBE_BY_ID.get(id)
-          return vibe ? { text: vibe.text, weight } : null
+          // Phase 2: resolve via the prompt pool, not the seed catalog,
+          // so user-submitted vibes like `bluegrass` reach the deck
+          // worker as `set_style` prompts when they're picked.
+          const text = this.signals.promptText(id)
+          return text ? { text, weight } : null
         })
         .filter((p): p is { text: string; weight: number } => p !== null)
       void this.transport.setStyle({
@@ -238,28 +244,33 @@ async function handlePhone(
       const existing = parsed.sessionToken
         ? options.identity.verify({ roomCode: code, sessionToken: parsed.sessionToken })
         : null
+      let sessionToken: string
       if (existing) {
         userId = existing
-        bundle.signals.seat(userId)
-        send(ws, {
-          type: 'welcome',
-          userId,
-          sessionToken: parsed.sessionToken ?? '',
-          vibes: SEED_VIBES,
-          seeded: true,
-        } satisfies PhoneServerMessage)
+        sessionToken = parsed.sessionToken ?? ''
       } else {
         const issued = options.identity.issue({ roomCode: code })
         userId = issued.userId
-        bundle.signals.seat(userId)
-        send(ws, {
-          type: 'welcome',
-          userId: issued.userId,
-          sessionToken: issued.sessionToken,
-          vibes: SEED_VIBES,
-          seeded: false,
-        } satisfies PhoneServerMessage)
+        sessionToken = issued.sessionToken
       }
+      bundle.signals.seat(userId)
+      // Phase 2: the welcome's `vibes` are dealt from the unified
+      // prompt pool through the same Thompson sampler that feeds the
+      // Vibes-tab card stack — so a user-suggested vibe surfaces in
+      // the next joiner's onboarding picker, not only on the Vibes
+      // tab. Returning users (existing identity) still get a fresh
+      // deal — their per-user `dealtBy` set survives, so they won't
+      // see prompts they've already voted on.
+      const vibes = bundle.signals.dealCards(userId, ONBOARDING_CARD_LIMIT, {
+        markDealt: false,
+      })
+      send(ws, {
+        type: 'welcome',
+        userId,
+        sessionToken,
+        vibes,
+        seeded: Boolean(existing),
+      } satisfies PhoneServerMessage)
       unsubscribe?.()
       unsubscribe = bundle.signals.subscribe(() => pushNow())
       pushNow()
@@ -356,7 +367,7 @@ async function handleHost(
     const vibeSupport = [...snapshot.vibeSupport.entries()]
       .map(([id, support]) => ({
         id,
-        label: promptLabels.get(id) ?? SEED_VIBE_BY_ID.get(id)?.label ?? id,
+        label: promptLabels.get(id) ?? id,
         support,
       }))
       .sort((a, b) => b.support - a.support)

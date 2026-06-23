@@ -4,6 +4,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { RoomSignalsState } from './room-state.js'
+import { mulberry32 } from './sampling.js'
 
 describe('RoomSignalsState', () => {
   it('counts seated participants and surfaces support per vibe', () => {
@@ -72,7 +73,7 @@ describe('RoomSignalsState', () => {
     assert.ok(support > 0)
   })
 
-  it('deals coverage-balanced cards least-shown-first', () => {
+  it('deals unique cards and avoids re-dealing already-shown ones', () => {
     const state = new RoomSignalsState(0)
     state.seat('u1', 0)
     const first = state.dealCards('u1', 3)
@@ -82,6 +83,44 @@ describe('RoomSignalsState', () => {
     const second = state.dealCards('u1', 3)
     const overlap = second.filter((c) => ids.includes(c.id))
     assert.equal(overlap.length, 0, 'subsequent deals avoid already-dealt cards for that user')
+  })
+
+  it('does not mark welcome-dealt cards as shown (markDealt: false)', () => {
+    const state = new RoomSignalsState(0)
+    state.seat('u1', 0)
+    const welcomeDeal = state.dealCards('u1', 9, { markDealt: false })
+    const next = state.dealCards('u1', 9)
+    // Welcome cards may legitimately re-appear in the next deal — the
+    // user only glanced at them, didn't vote.
+    const overlap = next.filter((c) => welcomeDeal.some((d) => d.id === c.id))
+    assert.ok(overlap.length > 0, `expected re-deal of unmarked cards, got ${overlap.length}`)
+  })
+
+  it('Thompson dealer prefers a fresh prompt over a heavily-downvoted seed', async () => {
+    const state = new RoomSignalsState(0, { random: mulberry32(42) })
+    state.seat('voter', 0)
+    // Make `sunset-disco` look uniformly hated.
+    for (let i = 0; i < 20; i++) state.castVote(`voter-${i}`, 'sunset-disco', -1, 100)
+    // A brand-new user-submitted prompt lands with no votes and a
+    // fresh recency bonus.
+    state.seat('u1', 0)
+    const result = await state.suggest({ userId: 'u1', text: 'bluegrass twang', now: 1000 })
+    if (result.kind !== 'created') throw new Error('expected created')
+    const newId = result.prompt.id
+    // Over many deals the fresh prompt should appear far more often
+    // than the heavily-downvoted seed in the top slot.
+    let freshTop = 0
+    let downvotedTop = 0
+    for (let i = 0; i < 100; i++) {
+      // Fresh per-user dealtBy each iteration so the dealer reconsiders.
+      const seat = `peek-${i}`
+      state.seat(seat, 0)
+      const deal = state.dealCards(seat, 1, { markDealt: false, now: 2000 })
+      const top = deal[0]
+      if (top?.id === newId) freshTop++
+      if (top?.id === 'sunset-disco') downvotedTop++
+    }
+    assert.ok(freshTop > downvotedTop, `fresh ${freshTop} should beat downvoted ${downvotedTop}`)
   })
 
   it('eventually retires a prompt when the applied vibe matches its embedding', () => {

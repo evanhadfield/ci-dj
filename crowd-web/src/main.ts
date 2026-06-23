@@ -19,7 +19,7 @@ import { NowScreen } from './now.ts'
 import { VibesScreen } from './vibes.ts'
 import { loadStored, saveStored } from './storage.ts'
 import { STRINGS } from './strings.ts'
-import type { PhoneServerMessage, VibePrompt } from './types.ts'
+import type { PhoneServerMessage, VibeCard } from './types.ts'
 
 const rootEl = document.getElementById('app')
 if (!rootEl) throw new Error('missing #app root')
@@ -35,7 +35,7 @@ if (!banner || !body) throw new Error('shell did not mount')
 
 setBanner(banner, STRINGS.joining, null)
 
-let vibes: VibePrompt[] = []
+let vibes: VibeCard[] = []
 let userId: string | null = null
 let seeded = stored.seeded ?? false
 let pendingSeed: string[] | null = null
