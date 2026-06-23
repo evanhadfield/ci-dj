@@ -12,7 +12,11 @@ export const STRINGS = {
     seedLabel: 'What do you want to hear?',
     seedPlaceholder: 'tell us in a few words…',
     seedConfirm: 'Save',
-    seedNote: 'Saved — Phase 2 will share suggestions with the room. For now it shapes your taste.',
+    /** Phase 2 promise: the free-text seed becomes a deduped vibe-prompt
+     * that other phones can vote on. Phase 1 stored the text client-
+     * side as a placeholder; the Vibes screen submit path now matches
+     * this copy. */
+    seedNote: 'added — others can vote on it soon',
     seedEdit: 'Edit',
     seedRemove: 'Remove',
     chips: ['Surprise me', "I'm open", 'Not sure'],
@@ -33,8 +37,26 @@ export const STRINGS = {
   },
   vibes: {
     tab: 'Vibes',
-    comingSoon:
-      "Vibe voting lands soon — for now your taps on the Now screen steer the room.",
+    eyebrow: 'Rate the vibe',
+    empty: 'Be the first — suggest a vibe.',
+    waitingForCards: 'Pulling cards from the room…',
+    progress: 'rated {n} — keep going?',
+    progressFirst: 'first one in — keep going?',
+    agree: 'Agree',
+    pass: 'Pass',
+    disagree: 'Disagree',
+    suggestEyebrow: 'Suggest a vibe',
+    suggestPlaceholder: 'short description, like "warm sunset disco"',
+    suggestSubmit: 'Suggest',
+    /** Mirrors `onboarding.seedNote` — the same promise reached through
+     * a different surface. */
+    suggestAddedCreated: 'added — others can vote on it soon',
+    suggestAddedDeduped: 'people are already vibing on that',
+    suggestRateLimited: "easy — give the room a moment, then suggest again",
+    suggestInvalid: "couldn't add that — try a shorter line",
+    /** Network drop / aggregator unreachable while a suggestion is in
+     * flight. The user's text stays in the field so they can retry. */
+    suggestNetwork: 'the room dropped — try again in a moment',
   },
   room: {
     tab: 'Room',

@@ -10,10 +10,22 @@ export type VibePrompt = {
   text: string
 }
 
+/** A card the Vibes screen renders. Mirrors `VibeCard` on the
+ * aggregator side — id, label, and the running vote count for the
+ * gentle "rated 6 — keep going?" progress copy. */
+export type VibeCard = {
+  id: string
+  label: string
+  voteCount: number
+}
+
 export type PhoneClientMessage =
   | { type: 'hello'; sessionToken?: string }
   | { type: 'seed'; picks: string[] }
   | { type: 'react'; sign: 1 | -1 }
+  | { type: 'suggest'; text: string }
+  | { type: 'vote'; promptId: string; vote: 1 | 0 | -1 }
+  | { type: 'request_cards'; limit?: number }
 
 export type PhoneServerMessage =
   | {
@@ -29,5 +41,14 @@ export type PhoneServerMessage =
       temperature: number
       shifting: boolean
       participantCount: number
+    }
+  | {
+      type: 'cards'
+      cards: VibeCard[]
+    }
+  | {
+      type: 'suggest_ack'
+      result: 'created' | 'deduped' | 'rate-limited' | 'invalid'
+      card?: VibeCard
     }
   | { type: 'error'; message: string }

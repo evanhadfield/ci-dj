@@ -86,20 +86,29 @@ freeze-sidecar:
 tauri-build: build
     cd src-tauri && cargo tauri build
 
-# All tests: backend pytest + frontend vitest + the Rust engine/shell.
+# All tests: backend pytest + frontend vitest + aggregator unit tests +
+# the Rust engine/shell. The aggregator tests cover the Phase 2 prompt
+# pool, opinion matrix, and the end-to-end WS suggest/vote loop
+# (docs/collective/README.md "Tests + lint").
 test:
     cd backend && uv run pytest
     cd frontend && npm run test
+    cd aggregator && npm test
     cd src-tauri && cargo test --workspace
 
-# Lint + format check + type-check, all three stacks. (No `cargo fmt --check`:
-# the Rust follows a hand-style like the frontend, not rustfmt — clippy is the
-# gate.)
+# Lint + format check + type-check, all stacks. The aggregator + crowd-
+# web typechecks land here too so a Phase 2 wire-format drift (see
+# `aggregator/src/signals/messages.ts` ↔ `crowd-web/src/types.ts`)
+# breaks the PR gate, not a runtime client. (No `cargo fmt --check`:
+# the Rust follows a hand-style like the frontend, not rustfmt — clippy
+# is the gate.)
 lint:
     cd backend && uv run ruff format --check .
     cd backend && uv run ruff check .
     cd frontend && npm run lint
     cd frontend && npx tsc -b
+    cd aggregator && npm run typecheck
+    cd crowd-web && npx tsc --noEmit
     cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings
 
 # Apply formatting.

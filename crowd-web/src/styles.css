@@ -492,6 +492,160 @@ button:focus-visible {
   min-height: var(--tap-min);
 }
 
+/* --- Vibes screen (Phase 2): the Pol.is card stack + suggest --- */
+
+.vibes {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem 1.25rem 2rem;
+  gap: 1.25rem;
+}
+
+.vibes__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.vibes__progress {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  min-height: 1.2em;
+}
+
+.vibes__stack {
+  position: relative;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vibes__empty {
+  margin: 0.5rem 0;
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.95rem;
+}
+
+.vibes__card {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 1.25rem;
+  padding: 1.5rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+  transition: transform 200ms ease, opacity 200ms ease;
+}
+
+.vibes__card:active {
+  cursor: grabbing;
+}
+
+.vibes__card-label {
+  margin: 0;
+  font-size: 1.4rem;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.vibes__card-count {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.vibes__actions {
+  display: grid;
+  grid-template-columns: 1fr 0.8fr 1fr;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.vibes__action {
+  border-radius: 0.85rem;
+  border: 1px solid var(--line);
+  background: var(--bg-elev);
+  color: var(--fg);
+  font-size: 0.95rem;
+  min-height: 52px;
+}
+
+.vibes__action--agree {
+  border-color: var(--like);
+  color: var(--like);
+}
+
+.vibes__action--disagree {
+  border-color: var(--dislike);
+  color: var(--dislike);
+}
+
+.vibes__action--pass {
+  color: var(--muted);
+}
+
+.vibes__suggest {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.vibes__suggest-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.vibes__suggest-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 0.75rem;
+  padding: 0.8rem 1rem;
+  font: inherit;
+  min-height: var(--tap-min);
+}
+
+.vibes__suggest-input:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.vibes__suggest-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 0.75rem;
+  padding: 0 1rem;
+  font-size: 0.95rem;
+  min-height: var(--tap-min);
+  transition: opacity 120ms ease;
+}
+
+.vibes__suggest-btn:disabled {
+  border-color: var(--line);
+  color: var(--muted);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.vibes__suggest-status {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  min-height: 1.2em;
+}
+
 /* --- Generic "coming soon" placeholder for stubbed tabs --- */
 
 .placeholder {

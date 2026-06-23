@@ -1,16 +1,22 @@
-/** crowd-web entry (Phase 1).
+/** crowd-web entry.
  *
  * Reads the room code from `/c/{code}`, joins via WebSocket, runs the
- * onboarding overlay on first visit, and mounts the Now screen.
+ * onboarding overlay on first visit, and mounts the three tabs:
  *
- * The Vibes (Pol.is card stack) and Room (host peek) tabs are stubbed
- * here as "coming soon" placeholders so the seam is visible — Phase 2
- * lights up Vibes, Phase 3 lights up clusters that the Room peek
- * surfaces. */
+ *   - Now (Phase 1): like / dislike, temperature gauge, shifting tag.
+ *   - Vibes (Phase 2): Pol.is-style card stack + suggest a vibe.
+ *   - Room (Phase 3): host peek; still a "coming soon" placeholder.
+ *
+ * On first WS join post-onboarding, any `pendingSeedText` recorded by
+ * Phase 1's onboarding (the free-text seed) is drained into the real
+ * suggestion pool via the Phase 2 `suggest` path, so the promise the
+ * onboarding pill made ("added — others can vote on it soon") now
+ * actually lands. */
 
 import { PhoneConnection, type ConnectionState } from './connection.ts'
 import { mountOnboarding } from './onboarding.ts'
 import { NowScreen } from './now.ts'
+import { VibesScreen } from './vibes.ts'
 import { loadStored, saveStored } from './storage.ts'
 import { STRINGS } from './strings.ts'
 import type { PhoneServerMessage, VibePrompt } from './types.ts'
@@ -33,6 +39,11 @@ let vibes: VibePrompt[] = []
 let userId: string | null = null
 let seeded = stored.seeded ?? false
 let pendingSeed: string[] | null = null
+let pendingSeedText: string | null = stored.pendingSeedText ?? null
+/** Live `suggest` calls that came out of the pending-seed-text drain,
+ * not user-facing — the next `suggest_ack` belongs to the Vibes screen
+ * only if it was user-initiated. */
+const silentSuggestQueue: string[] = []
 
 const nowScreen = new NowScreen({
   onLike: () => {
@@ -42,10 +53,21 @@ const nowScreen = new NowScreen({
     connection.send({ type: 'react', sign: -1 })
   },
 })
+
+const vibesScreen = new VibesScreen({
+  onVote: (promptId, vote) => {
+    connection.send({ type: 'vote', promptId, vote })
+  },
+  onSuggest: (text) => {
+    connection.send({ type: 'suggest', text })
+  },
+  onRequestCards: () => {
+    connection.send({ type: 'request_cards' })
+  },
+})
+
 body.append(nowScreen.element())
 
-// The Vibes/Room tabs are wired but show "coming soon" placeholders.
-// Phase 2/3 replace these with the card stack and the room peek.
 let activeTab: 'now' | 'vibes' | 'room' = 'now'
 mountTabs()
 
@@ -124,7 +146,10 @@ function setActiveTab(tab: 'now' | 'vibes' | 'room'): void {
   if (tab === 'now') {
     body.append(nowScreen.element())
   } else if (tab === 'vibes') {
-    body.append(makePlaceholder(STRINGS.vibes.comingSoon))
+    body.append(vibesScreen.element())
+    // First visit to the tab requests an initial deal so the stack
+    // doesn't render empty.
+    if (userId) connection.send({ type: 'request_cards' })
   } else {
     body.append(makePlaceholder(STRINGS.room.comingSoon))
   }
@@ -151,10 +176,11 @@ function clearBanner(element: HTMLElement): void {
 
 function handleConnectionState(state: ConnectionState): void {
   if (state.kind === 'open') {
-    // Re-emit hello on every (re)connection so the aggregator resumes
-    // the same userId (PLAN.md §7a step 5).
     connection.send({ type: 'hello', sessionToken: loadStored(code).sessionToken })
     return
+  }
+  if (state.kind === 'offline') {
+    vibesScreen.failSuggest()
   }
   if (!banner) return
   if (state.kind === 'connecting') {
@@ -176,6 +202,7 @@ function handleMessage(message: PhoneServerMessage): void {
       connection.send({ type: 'seed', picks: pendingSeed })
       pendingSeed = null
     }
+    drainPendingSeedText()
     return
   }
   if (message.type === 'now') {
@@ -187,6 +214,30 @@ function handleMessage(message: PhoneServerMessage): void {
     })
     return
   }
+  if (message.type === 'cards') {
+    vibesScreen.appendCards(message.cards)
+    return
+  }
+  if (message.type === 'suggest_ack') {
+    // Drain-of-pendingSeedText calls are silent — the onboarding pill
+    // already showed the same promise; we just don't want the Vibes
+    // screen's status line to flash for them.
+    if (silentSuggestQueue.length > 0) {
+      silentSuggestQueue.shift()
+      return
+    }
+    vibesScreen.acknowledgeSuggest(message.result, message.card)
+    return
+  }
+}
+
+function drainPendingSeedText(): void {
+  if (!pendingSeedText) return
+  const text = pendingSeedText
+  pendingSeedText = null
+  saveStored(code, { pendingSeedText: undefined })
+  silentSuggestQueue.push(text)
+  connection.send({ type: 'suggest', text })
 }
 
 function startOnboarding(): void {
@@ -194,14 +245,22 @@ function startOnboarding(): void {
     vibes,
     onSubmit: ({ picks, seedText }) => {
       seeded = true
-      // PLAN.md §7b promises the free-text seed becomes a deduped
-      // vibe-prompt — but the dedupe is Phase 2 (semantic via
-      // /api/embed). Phase 1 records the text client-side so a Phase 2
-      // build can pick it up on the next session without losing it.
-      saveStored(code, { seeded: true, pendingSeedText: seedText || undefined })
-      if (picks.length === 0) return
-      if (userId) connection.send({ type: 'seed', picks })
-      else pendingSeed = picks
+      saveStored(code, { seeded: true })
+      if (picks.length === 0 && !seedText) return
+      if (userId && picks.length > 0) connection.send({ type: 'seed', picks })
+      else if (picks.length > 0) pendingSeed = picks
+      if (seedText) {
+        if (userId) {
+          silentSuggestQueue.push(seedText)
+          connection.send({ type: 'suggest', text: seedText })
+        } else {
+          // Connection hasn't completed yet — remember the text so the
+          // welcome handler drains it. saveStored() guards against a
+          // tab close in between.
+          pendingSeedText = seedText
+          saveStored(code, { pendingSeedText: seedText })
+        }
+      }
     },
     onSkip: () => {
       seeded = true
