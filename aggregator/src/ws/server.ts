@@ -269,7 +269,12 @@ async function handlePhone(
         userId,
         sessionToken,
         vibes,
-        seeded: Boolean(existing),
+        // `seeded` reports whether the user has *actually* interacted
+        // (cast at least one onboarding pick or card-stack vote) —
+        // not just "we recognise this device." A refresh after an
+        // abandoned onboarding correctly reports `seeded: false`
+        // so the picker comes back.
+        seeded: bundle.signals.hasInteracted(userId),
       } satisfies PhoneServerMessage)
       unsubscribe?.()
       unsubscribe = bundle.signals.subscribe(() => pushNow())

@@ -204,11 +204,16 @@ function handleConnectionState(state: ConnectionState): void {
 function handleMessage(message: PhoneServerMessage): void {
   if (message.type === 'welcome') {
     userId = message.userId
-    saveStored(code, { sessionToken: message.sessionToken, seeded: seeded || message.seeded })
+    // `seeded` is a client-owned flag: only flip it true after the
+    // user actually completes or skips onboarding. The server's
+    // `message.seeded` is informational (it reports real interaction,
+    // not "we recognise this device") — but if the client cleared
+    // localStorage we still want the onboarding picker to re-appear,
+    // so we don't OR the server's claim into our state.
+    saveStored(code, { sessionToken: message.sessionToken })
     vibes = message.vibes
     if (banner) clearBanner(banner)
-    if (!seeded && !message.seeded) startOnboarding()
-    else seeded = true
+    if (!seeded) startOnboarding()
     if (pendingSeed && pendingSeed.length > 0) {
       connection.send({ type: 'seed', picks: pendingSeed })
       pendingSeed = null

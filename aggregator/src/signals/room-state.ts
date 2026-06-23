@@ -245,6 +245,15 @@ export class RoomSignalsState {
     return this.pool.get(id)?.text ?? null
   }
 
+  /** True iff this user has cast at least one card-stack vote or
+   * onboarding pick. The welcome handler reports this as `seeded` so
+   * a refresh after an abandoned onboarding doesn't claim the user
+   * finished — only a real interaction counts. */
+  hasInteracted(userId: string): boolean {
+    const row = this.matrix.rows().get(userId)
+    return row !== undefined && row.size > 0
+  }
+
   /** Run one aggregation tick and return the new signals snapshot.
    *
    * Phase 2 also runs the prompt-pool sweep: decay support against

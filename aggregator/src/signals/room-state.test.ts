@@ -53,6 +53,19 @@ describe('RoomSignalsState', () => {
     assert.equal(state.snapshot().participantCount, 0)
   })
 
+  it('reports hasInteracted=false for a seated-but-silent user', () => {
+    const state = new RoomSignalsState(0)
+    state.seat('u1', 0)
+    assert.equal(state.hasInteracted('u1'), false)
+  })
+
+  it('reports hasInteracted=true after the user casts a single pick', () => {
+    const state = new RoomSignalsState(0)
+    state.seat('u1', 0)
+    state.applySeed('u1', ['sunset-disco'], 0)
+    assert.equal(state.hasInteracted('u1'), true)
+  })
+
   it('accepts a Phase 2 suggestion and surfaces it through the snapshot', async () => {
     const state = new RoomSignalsState(0)
     state.seat('u1', 0)
