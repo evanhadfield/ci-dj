@@ -13,8 +13,8 @@ deck restyle), jump to [**Running Phase 1 locally**](#running-phase-1-locally)
 | 0     | Seams: `/api/embed`, room codes + QR, transport/identity ifaces | **Done** |
 | 1     | Reactive backbone — phone taps drive the deck via the bridge    | **Done** |
 | 2     | Proactive: Pol.is card stack + suggestions + semantic dedupe    | **Done** |
-| 3     | Clustering + social-choice policy (PR / maximin)                | Next     |
-| 4     | v2 seams + hardening (LAN identity, persistence, moderation)    | Pending  |
+| 3     | Clustering + social-choice policy (PR / maximin)                | **Done** |
+| 4     | v2 seams + hardening (LAN identity, persistence, moderation)    | Next     |
 
 Hand off to the next phase by passing the repo + `PROMPT.md` to a fresh
 Claude session. `PROMPT.md` carries the gated, phase-specific instructions
@@ -128,6 +128,86 @@ What is still stubbed (the seams for Phase 3+):
   the classifier doesn't).
 - Per-vibe cluster sentiment on the host-screen map (split rings /
   mini-bars) waits for the cluster fan-out in Phase 3.
+
+## Phase 3 — what landed
+
+- **`aggregator/signals/clusters.ts`** — replaces the Phase 2 stub
+  with PCA (power iteration on the mean-centered, sparse `user ×
+  prompt` matrix) followed by K-means in 2-dim PCA space. Gated on
+  `CLUSTER_MIN_N = 18` active voters; below the gate, no clusters
+  surface and the pipeline falls back to its existing centroid
+  behaviour. The RNG is injectable so tests run deterministically
+  with Mulberry32 seeds. Same file exposes `computePolicies()` —
+  `centroid` (size-weighted mean), `pr` (largest-remainder rotation
+  through clusters across an 8-tick window), `maximin` (the bridge —
+  pick the prompts every effective cluster tolerates), `auto`
+  (`centroid` below the gate, `pr` over). All three blends are
+  computed every tick and surfaced on the snapshot for A/B
+  comparison, even when only one is driving the deck.
+- **Pipeline `compose` step** (`signals/pipeline.ts`) — §5.7 explicit
+  + implicit streams: the policy blend mixes with the taste-EWMA
+  target at `POLICY_BLEND_WEIGHT = 0.5`. Empty policy → identity
+  (Phase 1/2 path).
+- **Manifold-outlier distance** — per-user cosine distance to the
+  dominant PCA subspace is computed and surfaced on the room
+  snapshot as `outlierDistances`. **Logged, not yet driving** the
+  per-user contribution cap (the PLAN.md §5 deferred ledger item —
+  Phase 4 closes the loop).
+- **Wire format** — `HostServerMessage.signals` now carries
+  `vibeSupport[i].clusterMass: { clusterId, agree, disagree, pass }[]`,
+  the active voter count, the cluster list (`{ id, size }[]`), and
+  the applied policy. Below `CLUSTER_MIN_N` the cluster fields stay
+  empty and the host renders single-organism. New `PeekServerMessage`
+  type rides on `/ws/peek` — the throttled, many-subscribers mirror
+  of the host channel for the crowd-web Room tab. The bridge gained a
+  client → aggregator `policy_select` direction (`BridgeClientMessage`).
+- **`host-screen/`** — the vibe map's circles are now SVG split-rings
+  when clusters are present: one arc per cluster, sized by that
+  cluster's agree mass on the prompt, with stroke-opacity fading on
+  disagreement. A 5-colour palette + chip legend lives beside the map
+  and the applied policy ("auto → pr", "maximin") rides as a small
+  footer.
+- **`crowd-web/` Room tab** — the placeholder is gone. A `/ws/peek`
+  client mirrors the host signal; the tab renders a phone-sized
+  temperature trace + top-6 vibe ring map and swaps copy between
+  single-organism and multi-cluster modes based on activeVoters vs
+  `CLUSTER_MIN_N`. Silent reconnect on drop; the last known state
+  stays painted while connecting.
+- **InfluencePanel policy selector** — `frontend/src/collective/
+  InfluencePanel.tsx` grows a radio group (auto / time-share / bridge)
+  built from the existing Button primitive. The DJ's choice rides over
+  the bridge socket as `policy_select`; the bridge re-sends the active
+  choice on every reconnect, so an aggregator restart picks the
+  selection back up without a round trip through the panel.
+  `CrowdInfluence.policy` joins `amount` / `locked` in the state
+  shape; the bridge gate semantics for amount/lock are unchanged.
+- **Phase 2 polish** — Vibes-card buttons pulse on commit
+  (`vibes__action--just-tapped`, mirroring the Now-screen flash
+  pattern). The infinite `request_cards` poll is closed: when the
+  server returns an empty deal we mark the pool exhausted, swap
+  empty-state copy to "you've rated everything in the pool — suggest
+  a new vibe to keep it moving", and resume normal prefetching when
+  a suggestion ack or fresh deal carries a new card in.
+- **Tests** — 109 aggregator tests passing (new
+  `signals/clusters.test.ts` covers gate behaviour, planted-group
+  recovery, manifold-outlier shape, and all three policy paths;
+  `ws/server.test.ts` covers `/ws/peek` + `policy_select`
+  round-trips). Frontend vitest still 579 passing (existing two flaky
+  tests on main remain flaky; not Phase-3's fault). `crowd-web` and
+  `aggregator` typechecks are clean.
+
+What is still stubbed (the seams for Phase 4):
+
+- `aggregator/signals/moderation.ts`: `autoApproveClassifier` still
+  lets every suggestion through; the DJ approve/veto lane remains
+  the v1 moderation lever.
+- Manifold-outlier distance is computed + surfaced on the snapshot
+  but does not yet down-weight a user's contribution; Phase 4 will
+  multiply the per-user cap by `(1 - outlierDistance)` (or similar)
+  to close the §5 deferred ledger.
+- `CaptivePortalIdentity` is still the v2 seam.
+- No persistence or restart story; in-memory state is acceptable in
+  v1 (PLAN.md §9 fail-safe).
 
 ## Running Phase 1 locally
 
