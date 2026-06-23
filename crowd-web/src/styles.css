@@ -662,6 +662,97 @@ button:focus-visible {
   min-height: 1.2em;
 }
 
+/* --- Room screen (Phase 3): host peek over /ws/peek --- */
+
+.room {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem 1.25rem 2rem;
+  gap: 1.25rem;
+}
+
+.room__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.room__status {
+  margin: 0;
+  font-size: 1.2rem;
+  letter-spacing: -0.01em;
+  min-height: 1.4em;
+}
+
+.room__mode {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  min-height: 1em;
+}
+
+.room__trace {
+  border-radius: 0.9rem;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  padding: 0.75rem;
+}
+
+.room__trace-canvas {
+  width: 100%;
+  height: 80px;
+  display: block;
+}
+
+.room__vibes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem 0.75rem;
+  align-items: end;
+}
+
+.room__vibe {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.room__vibe-circle-wrap {
+  display: grid;
+  place-items: center;
+  transition: width 300ms ease, height 300ms ease;
+}
+
+.room__vibe-circle {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: rgba(182, 240, 107, 0.18);
+  border: 2px solid var(--accent);
+  transition: opacity 300ms ease;
+}
+
+.room__vibe-ring {
+  width: 100%;
+  height: 100%;
+  transition: opacity 300ms ease;
+}
+
+.room__vibe-label {
+  font-size: 0.78rem;
+  color: var(--fg);
+  text-align: center;
+  line-height: 1.2;
+}
+
+.room__hint {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
 /* --- Generic "coming soon" placeholder for stubbed tabs --- */
 
 .placeholder {

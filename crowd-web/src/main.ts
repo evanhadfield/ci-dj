@@ -17,9 +17,10 @@ import { PhoneConnection, type ConnectionState } from './connection.ts'
 import { mountOnboarding } from './onboarding.ts'
 import { NowScreen } from './now.ts'
 import { VibesScreen } from './vibes.ts'
+import { RoomScreen } from './room.ts'
 import { loadStored, saveStored } from './storage.ts'
 import { STRINGS } from './strings.ts'
-import type { PhoneServerMessage, VibeCard } from './types.ts'
+import type { PeekServerMessage, PhoneServerMessage, VibeCard } from './types.ts'
 
 const rootEl = document.getElementById('app')
 if (!rootEl) throw new Error('missing #app root')
@@ -76,6 +77,16 @@ const vibesScreen = new VibesScreen({
     connection.send({ type: 'request_cards' })
   },
 })
+
+const roomScreen = new RoomScreen()
+const peek = createPeekSocket(`${wsBase}/ws/peek?code=${encodeURIComponent(code)}`, {
+  onOpen: () => roomScreen.setStatus('open'),
+  onClose: () => roomScreen.setStatus('offline'),
+  onMessage: (message) => {
+    if (message.type === 'peek') roomScreen.apply(message)
+  },
+})
+peek.start()
 
 body.append(nowScreen.element())
 
@@ -162,15 +173,64 @@ function setActiveTab(tab: 'now' | 'vibes' | 'room'): void {
     // doesn't render empty.
     if (userId) connection.send({ type: 'request_cards' })
   } else {
-    body.append(makePlaceholder(STRINGS.room.comingSoon))
+    body.append(roomScreen.element())
   }
 }
 
-function makePlaceholder(text: string): HTMLElement {
-  const placeholder = document.createElement('section')
-  placeholder.className = 'placeholder'
-  placeholder.textContent = text
-  return placeholder
+type PeekHandlers = {
+  onOpen: () => void
+  onClose: () => void
+  onMessage: (message: PeekServerMessage) => void
+}
+
+/** Minimal peek socket: silent reconnect, surfaces open/offline to the
+ * Room screen so it can swap status copy. We don't need the full
+ * PhoneConnection — there's no client→server side on /ws/peek. */
+function createPeekSocket(url: string, handlers: PeekHandlers): { start: () => void } {
+  const RECONNECT_INITIAL_MS = 1_000
+  const RECONNECT_MAX_MS = 8_000
+  let ws: WebSocket | null = null
+  let reconnectMs = RECONNECT_INITIAL_MS
+  let reconnectTimer: number | null = null
+  let closed = false
+  const open = (): void => {
+    if (closed) return
+    try {
+      ws = new WebSocket(url)
+    } catch {
+      scheduleReconnect()
+      return
+    }
+    ws.addEventListener('open', () => {
+      reconnectMs = RECONNECT_INITIAL_MS
+      handlers.onOpen()
+    })
+    ws.addEventListener('message', (event) => {
+      try {
+        const parsed = JSON.parse(String(event.data)) as PeekServerMessage
+        handlers.onMessage(parsed)
+      } catch {
+        // Malformed frame; drop silently — the aggregator never sends one.
+      }
+    })
+    ws.addEventListener('close', () => {
+      ws = null
+      handlers.onClose()
+      scheduleReconnect()
+    })
+    ws.addEventListener('error', () => {
+      // close handler will own the retry path.
+    })
+  }
+  const scheduleReconnect = (): void => {
+    if (closed || reconnectTimer !== null) return
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null
+      open()
+    }, reconnectMs)
+    reconnectMs = Math.min(reconnectMs * 2, RECONNECT_MAX_MS)
+  }
+  return { start: () => open() }
 }
 
 function setBanner(element: HTMLElement, title: string, hint: string | null): void {

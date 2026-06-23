@@ -20,7 +20,7 @@
  * the deck simply keeps the last DJ-applied style. */
 
 import { sendNativeDeckCommand, type DeckCommand } from '../deck/nativeDeck'
-import type { CrowdInfluence } from './influence'
+import type { CrowdInfluence, PolicyChoice } from './influence'
 
 export type BridgeIntent = {
   deck: 'a' | 'b'
@@ -81,6 +81,16 @@ export class CollectiveBridge {
     this.openSocket()
   }
 
+  /** Phase 3 §6: push the DJ's social-choice policy to the aggregator.
+   * Idempotent — re-sending the same choice is a no-op on the server.
+   * When the socket is closed (offline / reconnecting) the call is a
+   * no-op; the next reconnect re-sends from `openSocket`. */
+  selectPolicy(choice: PolicyChoice): void {
+    const ws = this.ws
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    ws.send(JSON.stringify({ type: 'policy_select', choice }))
+  }
+
   stop(): void {
     this.stopped = true
     if (this.reconnectTimer !== null) {
@@ -113,6 +123,11 @@ export class CollectiveBridge {
     ws.addEventListener('open', () => {
       this.reconnectMs = RECONNECT_INITIAL_MS
       this.setState({ kind: 'open' })
+      // Phase 3 §6: re-send the active policy choice on every connect
+      // so a reconnect or aggregator restart picks the DJ's selection
+      // back up without a round trip through `InfluencePanel`.
+      const choice = this.options.influenceRef.current.policy
+      ws.send(JSON.stringify({ type: 'policy_select', choice }))
     })
     ws.addEventListener('message', (event) => {
       let parsed: unknown

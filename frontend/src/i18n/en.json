@@ -237,6 +237,13 @@
       "title": "Crowd influence",
       "amount": "Influence",
       "lock": "Lock for the drop",
+      "policy": "Policy",
+      "policyChoice": {
+        "auto": "Auto",
+        "centroid": "Centroid",
+        "pr": "Time-share",
+        "maximin": "Bridge"
+      },
       "crowdTarget": "Crowd target",
       "crowdTargetIdle": "— no signals yet",
       "crowdTargetItem": "{{percent}}% {{text}}",

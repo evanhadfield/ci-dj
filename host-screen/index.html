@@ -29,11 +29,14 @@
           <canvas id="trace" width="800" height="160"></canvas>
           <div id="celebrate" class="host__celebrate" aria-hidden="true">★</div>
         </div>
-        <div class="host__vibemap" aria-label="Vibe opinion map (single-organism mode)">
-          <p class="eyebrow">Vibe map</p>
+        <div class="host__vibemap" aria-label="Vibe opinion map">
+          <div class="host__vibemap-header">
+            <p class="eyebrow">Vibe map</p>
+            <p id="policyLabel" class="host__policy muted" aria-live="polite"></p>
+          </div>
           <div id="vibes" class="host__vibes"></div>
-          <p class="host__vibemap-hint muted">
-            Single-organism view — clusters land in Phase 3.
+          <p id="vibemapHint" class="host__vibemap-hint muted">
+            Single-organism view — clusters appear above 18 voters.
           </p>
         </div>
       </section>

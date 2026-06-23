@@ -27,6 +27,42 @@ export type PhoneClientMessage =
   | { type: 'vote'; promptId: string; vote: 1 | 0 | -1 }
   | { type: 'request_cards'; limit?: number }
 
+/** Per-cluster sentiment on a single prompt — the host-screen split-
+ * ring renderer and the Room-tab vibe map both pivot off this. */
+export type ClusterMass = {
+  clusterId: string
+  agree: number
+  disagree: number
+  pass: number
+}
+
+export type PeekVibeSupport = {
+  id: string
+  label: string
+  support: number
+  clusterMass: ClusterMass[]
+}
+
+export type PeekPolicy = {
+  choice: 'centroid' | 'pr' | 'maximin' | 'auto'
+  appliedPolicy: 'centroid' | 'pr' | 'maximin'
+}
+
+/** Phase 3 §7b.3: read-only mirror of the host channel sized for
+ * crowd-web's Room tab. Mirrors `PeekServerMessage` in the aggregator. */
+export type PeekServerMessage = {
+  type: 'peek'
+  label: string
+  temperature: number
+  shifting: boolean
+  participantCount: number
+  effectiveParticipants: number
+  activeVoters: number
+  vibeSupport: PeekVibeSupport[]
+  clusters: { id: string; size: number }[]
+  policy: PeekPolicy
+}
+
 export type PhoneServerMessage =
   | {
       type: 'welcome'

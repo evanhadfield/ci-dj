@@ -203,6 +203,53 @@ describe('attachWsServer', () => {
     }
   })
 
+  it('mirrors host signals to /ws/peek subscribers (Phase 3 Room tab)', async () => {
+    const ctx = await setup()
+    try {
+      const peek = openClient(ctx.port, '/ws/peek', ctx.code)
+      const peekBuf = new MessageBuffer(peek)
+      await new Promise<void>((res) => peek.once('open', () => res()))
+      const first = await peekBuf.wait((m) => m.type === 'peek')
+      assert.ok(Array.isArray(first.vibeSupport))
+      assert.ok(Array.isArray(first.clusters))
+      assert.ok(first.policy)
+      peek.close()
+    } finally {
+      await ctx.close()
+    }
+  })
+
+  it('accepts a policy_select message from the bridge and stores the choice', async () => {
+    const ctx = await setup()
+    try {
+      const bridge = openClient(ctx.port, '/ws/bridge', ctx.code)
+      const bridgeBuf = new MessageBuffer(bridge)
+      await new Promise<void>((res) => bridge.once('open', () => res()))
+      await bridgeBuf.wait((m) => m.type === 'hello')
+      bridge.send(JSON.stringify({ type: 'policy_select', choice: 'maximin' }))
+      // Drive a tick by reacting through a phone, then read the peek
+      // to confirm the policy field now carries `maximin`.
+      const phone = openClient(ctx.port, '/ws/phone', ctx.code)
+      const phoneBuf = new MessageBuffer(phone)
+      await new Promise<void>((res) => phone.once('open', () => res()))
+      phone.send(JSON.stringify({ type: 'hello' }))
+      await phoneBuf.wait((m) => m.type === 'welcome')
+      const peek = openClient(ctx.port, '/ws/peek', ctx.code)
+      const peekBuf = new MessageBuffer(peek)
+      await new Promise<void>((res) => peek.once('open', () => res()))
+      const update = await peekBuf.wait(
+        (m) => m.type === 'peek' && (m.policy as { choice: string }).choice === 'maximin',
+        4_000,
+      )
+      assert.ok(update)
+      phone.close()
+      peek.close()
+      bridge.close()
+    } finally {
+      await ctx.close()
+    }
+  })
+
   it('keeps the aggregator alive when a bridge subscriber drops mid-tick (§9)', async () => {
     const ctx = await setup()
     try {

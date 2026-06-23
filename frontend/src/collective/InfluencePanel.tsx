@@ -13,9 +13,11 @@ import { Button } from '../ui/Button'
 import { Knob } from '../ui/Knob'
 import { Panel } from '../ui/Panel'
 import { Stat } from '../ui/Stat'
-import type { CrowdInfluence } from './influence'
+import type { CrowdInfluence, PolicyChoice } from './influence'
 import { isCollectiveEnabled } from './flag'
 import type { BridgeStatus } from './useBridge'
+
+const POLICY_CHOICES: readonly PolicyChoice[] = ['auto', 'pr', 'maximin']
 
 type InfluencePanelProps = {
   influence: CrowdInfluence
@@ -57,6 +59,29 @@ export function InfluencePanel({ influence, onChange, status }: InfluencePanelPr
       >
         {t('collective.influence.lock')}
       </Button>
+      <div
+        className="collective-influence__policy"
+        role="radiogroup"
+        aria-label={t('collective.influence.policy')}
+      >
+        <span className="collective-influence__policy-label">
+          {t('collective.influence.policy')}
+        </span>
+        {POLICY_CHOICES.map((choice) => (
+          <Button
+            key={choice}
+            role="radio"
+            aria-checked={influence.policy === choice}
+            lit={influence.policy === choice}
+            onClick={() => {
+              onChange({ ...influence, policy: choice })
+              status.selectPolicy(choice)
+            }}
+          >
+            {t(`collective.influence.policyChoice.${choice}`)}
+          </Button>
+        ))}
+      </div>
       <Stat
         label={t('collective.influence.crowdTarget')}
         value={targetSummary}

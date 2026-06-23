@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { aggregatorUrl, bridgeToken, isCollectiveEnabled } from './flag'
 import { CollectiveBridge, type BridgeIntent, type BridgeState } from './bridge'
-import type { CrowdInfluence } from './influence'
+import type { CrowdInfluence, PolicyChoice } from './influence'
 
 export type RoomInfo = {
   code: string
@@ -27,12 +27,19 @@ export type BridgeStatus = {
   room: RoomInfo | null
   bridge: BridgeState
   intent: BridgeIntent | null
+  /** Phase 3 §6: ask the aggregator to switch policies. No-op when the
+   * bridge socket is closed; the next reconnect re-pushes whichever
+   * value the influence state currently holds. */
+  selectPolicy: (choice: PolicyChoice) => void
 }
+
+const NOOP_POLICY = () => {}
 
 const INITIAL_STATUS: BridgeStatus = {
   room: null,
   bridge: { kind: 'idle' },
   intent: null,
+  selectPolicy: NOOP_POLICY,
 }
 
 export function useCollectiveBridge(influence: CrowdInfluence): BridgeStatus {
@@ -61,7 +68,6 @@ export function useCollectiveBridge(influence: CrowdInfluence): BridgeStatus {
       })
       .then((room) => {
         if (cancelled) return
-        setStatus((s) => ({ ...s, room }))
         bridge = new CollectiveBridge({
           aggregatorUrl: url,
           roomCode: room.code,
@@ -70,6 +76,8 @@ export function useCollectiveBridge(influence: CrowdInfluence): BridgeStatus {
           onState: (state) => setStatus((s) => ({ ...s, bridge: state })),
           onIntent: (intent) => setStatus((s) => ({ ...s, intent })),
         })
+        const selectPolicy: BridgeStatus['selectPolicy'] = (choice) => bridge?.selectPolicy(choice)
+        setStatus((s) => ({ ...s, room, selectPolicy }))
         bridge.start()
       })
       .catch(() => {

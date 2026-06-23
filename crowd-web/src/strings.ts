@@ -80,10 +80,6 @@ export const STRINGS = {
     offline: 'projection screen is the truth right now',
     /** Empty vibe map. */
     emptyMap: 'no vibes ranked yet — head over to the Vibes tab',
-    /** Legacy fallback while the Room tab is mid-build (referenced by
-     * main.ts pre-Room-wire); kept until that switch flips. */
-    comingSoon:
-      'A peek at the room view lands soon — for now watch the projection screen.',
   },
 } as const
 

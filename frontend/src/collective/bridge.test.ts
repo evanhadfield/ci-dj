@@ -7,8 +7,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { CollectiveBridge } from './bridge'
 import type { CrowdInfluence } from './influence'
 
-function makeBridge(influence: CrowdInfluence) {
+function makeBridge(partial: Partial<CrowdInfluence> & Pick<CrowdInfluence, 'amount' | 'locked'>) {
   const dispatch = vi.fn()
+  const influence: CrowdInfluence = { policy: 'auto', ...partial }
   const influenceRef = { current: influence }
   const bridge = new CollectiveBridge({
     aggregatorUrl: 'http://aggregator.test',
@@ -64,7 +65,7 @@ describe('CollectiveBridge gate', () => {
       prompts: [{ text: 'x', weight: 1 }],
     })
     expect(dispatch).toHaveBeenCalledTimes(1)
-    influenceRef.current = { amount: 0.8, locked: true }
+    influenceRef.current = { amount: 0.8, locked: true, policy: 'auto' }
     bridge.applyIntent({
       deck: 'a',
       prompts: [{ text: 'x', weight: 1 }],
@@ -87,7 +88,7 @@ describe('CollectiveBridge gate', () => {
     const bridge = new CollectiveBridge({
       aggregatorUrl: 'http://x',
       roomCode: 'AB12',
-      influenceRef: { current: { amount: 0, locked: true } },
+      influenceRef: { current: { amount: 0, locked: true, policy: 'auto' } },
       dispatch,
       onIntent,
     })
