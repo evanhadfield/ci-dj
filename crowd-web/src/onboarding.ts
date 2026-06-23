@@ -1,6 +1,18 @@
 /** Onboarding overlay (PLAN.md §7b): one-line free-text seed +
  * tap-3-vibes pick. Submitting casts 3 first votes and dismisses the
- * overlay. Skip is always present. */
+ * overlay. Skip is always present.
+ *
+ * UX shape: the free-text and the pick-3 cards are *independent* first-
+ * touches, not sequential. Enter inside the seed field captures the
+ * typed text into a visible "saved" pill (the user gets the receipt
+ * they want without the overlay closing); the cards remain available
+ * after that, so the same flow yields text-only, picks-only, or both.
+ *
+ * Phase 1 caveat: PLAN.md §7b promises the free-text becomes a deduped
+ * vibe-prompt visible to other phones — but the semantic dedupe lives
+ * on `/api/embed` and the shared vibe-prompt pool is the Phase 2 Vibes
+ * screen (PROMPT.md). Phase 1 stores the text client-side via
+ * `seedText` so Phase 2 can promote it; the pill copy says so. */
 
 import { STRINGS } from './strings.ts'
 import type { VibePrompt } from './types.ts'
@@ -33,6 +45,10 @@ export function mountOnboarding(
 
   const picks = new Set<string>()
   let chipSelected: string | null = null
+  /** The free-text after the user explicitly accepts it (Enter / Save).
+   * Until accepted the input value is provisional and doesn't count
+   * toward the submission. */
+  let confirmedText: string | null = null
 
   const inner = document.createElement('div')
   inner.className = 'onboarding__inner'
@@ -49,6 +65,10 @@ export function mountOnboarding(
   seedLabel.htmlFor = 'onboarding-seed'
   inner.append(seedLabel)
 
+  const seedRow = document.createElement('div')
+  seedRow.className = 'onboarding__seed-row'
+  inner.append(seedRow)
+
   const seedInput = document.createElement('input')
   seedInput.id = 'onboarding-seed'
   seedInput.className = 'onboarding__input'
@@ -56,20 +76,96 @@ export function mountOnboarding(
   seedInput.placeholder = STRINGS.onboarding.seedPlaceholder
   seedInput.autocomplete = 'off'
   seedInput.maxLength = 80
+  seedRow.append(seedInput)
+
+  const seedSave = document.createElement('button')
+  seedSave.type = 'button'
+  seedSave.className = 'onboarding__seed-save'
+  seedSave.textContent = STRINGS.onboarding.seedConfirm
+  seedSave.disabled = true
+  seedRow.append(seedSave)
+
+  /** The pill that confirms the typed text has been captured. Empty
+   * until the user hits Enter / Save, then carries an Edit + Remove. */
+  const seedPill = document.createElement('div')
+  seedPill.className = 'onboarding__seed-pill'
+  seedPill.hidden = true
+  inner.append(seedPill)
+
+  function confirmSeedText(): void {
+    const value = seedInput.value.trim()
+    if (!value) return
+    confirmedText = value
+    chipSelected = null
+    seedInput.value = ''
+    renderSeedPill()
+    renderChips()
+    renderFooter()
+  }
+
+  function clearSeedText(): void {
+    confirmedText = null
+    renderSeedPill()
+    renderFooter()
+  }
+
+  function renderSeedPill(): void {
+    seedPill.replaceChildren()
+    if (!confirmedText) {
+      seedPill.hidden = true
+      return
+    }
+    seedPill.hidden = false
+    const label = document.createElement('span')
+    label.className = 'onboarding__seed-pill-label'
+    label.textContent = confirmedText
+    seedPill.append(label)
+    const note = document.createElement('span')
+    note.className = 'onboarding__seed-pill-note'
+    note.textContent = STRINGS.onboarding.seedNote
+    seedPill.append(note)
+    const actions = document.createElement('div')
+    actions.className = 'onboarding__seed-pill-actions'
+    const editBtn = document.createElement('button')
+    editBtn.type = 'button'
+    editBtn.className = 'onboarding__seed-pill-action'
+    editBtn.textContent = STRINGS.onboarding.seedEdit
+    editBtn.addEventListener('click', () => {
+      seedInput.value = confirmedText ?? ''
+      confirmedText = null
+      renderSeedPill()
+      renderFooter()
+      // Move the cursor to the end of the field for editing.
+      requestAnimationFrame(() => {
+        seedInput.focus()
+        const len = seedInput.value.length
+        seedInput.setSelectionRange(len, len)
+      })
+    })
+    const removeBtn = document.createElement('button')
+    removeBtn.type = 'button'
+    removeBtn.className = 'onboarding__seed-pill-action'
+    removeBtn.textContent = STRINGS.onboarding.seedRemove
+    removeBtn.addEventListener('click', clearSeedText)
+    actions.append(editBtn, removeBtn)
+    seedPill.append(actions)
+  }
+
   seedInput.addEventListener('input', () => {
     if (seedInput.value.length > 0) {
       chipSelected = null
       renderChips()
     }
+    seedSave.disabled = seedInput.value.trim().length === 0
     renderFooter()
   })
   seedInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       event.preventDefault()
-      if (!submitBtn.disabled) submitBtn.click()
+      confirmSeedText()
     }
   })
-  inner.append(seedInput)
+  seedSave.addEventListener('click', confirmSeedText)
 
   const chipsRow = document.createElement('div')
   chipsRow.className = 'onboarding__chips'
@@ -82,7 +178,14 @@ export function mountOnboarding(
       button.textContent = chip
       button.addEventListener('click', () => {
         chipSelected = chipSelected === chip ? null : chip
-        if (chipSelected) seedInput.value = ''
+        if (chipSelected) {
+          seedInput.value = ''
+          seedSave.disabled = true
+          // A chip choice is the "opt-out" path — silently clears any
+          // confirmed text so we don't keep two contradictory seeds.
+          confirmedText = null
+          renderSeedPill()
+        }
         renderChips()
         renderFooter()
       })
@@ -135,12 +238,11 @@ export function mountOnboarding(
   const submitBtn = document.createElement('button')
   submitBtn.type = 'button'
   submitBtn.className = 'onboarding__submit'
-  /** True iff the user has given us any first-touch signal at all. Per
-   * PLAN.md §7b the free-text, the opt-out chips, and the pick-3 are
-   * each independently valid — submit must accept whichever the user
-   * actually chose. */
+  /** True iff the user has given us any first-touch signal at all.
+   * Confirmed text, chip, or three picks all count — the form accepts
+   * whichever path the user actually completed. */
   function hasAnySignal(): boolean {
-    return picks.size === 3 || seedInput.value.trim().length > 0 || chipSelected !== null
+    return picks.size === 3 || confirmedText !== null || chipSelected !== null
   }
   function renderFooter() {
     footer.replaceChildren()
@@ -162,7 +264,7 @@ export function mountOnboarding(
   }
   submitBtn.addEventListener('click', () => {
     if (submitBtn.disabled) return
-    const seedText = seedInput.value.trim() || chipSelected || ''
+    const seedText = confirmedText ?? chipSelected ?? ''
     dismiss()
     options.onSubmit({ picks: [...picks], seedText })
   })
