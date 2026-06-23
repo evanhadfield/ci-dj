@@ -154,6 +154,55 @@ describe('attachWsServer', () => {
     }
   })
 
+  it('accepts a phone-side suggest and acks with created or deduped', async () => {
+    const ctx = await setup()
+    try {
+      const phone = openClient(ctx.port, '/ws/phone', ctx.code)
+      const phoneBuf = new MessageBuffer(phone)
+      await new Promise<void>((res) => phone.once('open', () => res()))
+      phone.send(JSON.stringify({ type: 'hello' }))
+      await phoneBuf.wait((m) => m.type === 'welcome')
+
+      phone.send(JSON.stringify({ type: 'suggest', text: 'wonky bass · tape saturation' }))
+      const ack = await phoneBuf.wait((m) => m.type === 'suggest_ack')
+      assert.equal(ack.result, 'created')
+      assert.ok(ack.card)
+
+      // Re-submitting the exact text dedupes against the previous prompt.
+      phone.send(JSON.stringify({ type: 'suggest', text: 'wonky bass · tape saturation' }))
+      const ack2 = await phoneBuf.wait((m) => m.type === 'suggest_ack' && m !== ack)
+      assert.equal(ack2.result, 'deduped')
+
+      phone.close()
+    } finally {
+      await ctx.close()
+    }
+  })
+
+  it('deals card-stack cards and accepts votes on them', async () => {
+    const ctx = await setup()
+    try {
+      const phone = openClient(ctx.port, '/ws/phone', ctx.code)
+      const phoneBuf = new MessageBuffer(phone)
+      await new Promise<void>((res) => phone.once('open', () => res()))
+      phone.send(JSON.stringify({ type: 'hello' }))
+      await phoneBuf.wait((m) => m.type === 'welcome')
+
+      phone.send(JSON.stringify({ type: 'request_cards', limit: 3 }))
+      const cards = await phoneBuf.wait((m) => m.type === 'cards')
+      const arr = cards.cards as { id: string; label: string }[]
+      assert.equal(arr.length, 3)
+
+      // A vote should land without an error reply.
+      phone.send(JSON.stringify({ type: 'vote', promptId: arr[0]!.id, vote: 1 }))
+      // The next 'now' or 'cards' frame proves the loop didn't error.
+      await phoneBuf.wait((m) => m.type === 'now' || m.type === 'cards', 2_000)
+      phone.close()
+    } finally {
+      await ctx.close()
+    }
+  })
+
   it('keeps the aggregator alive when a bridge subscriber drops mid-tick (§9)', async () => {
     const ctx = await setup()
     try {

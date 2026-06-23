@@ -26,10 +26,12 @@ import { fileURLToPath } from 'node:url'
 import { RoomStore } from './rooms/rooms.js'
 import { DeviceIdentity } from './identity/provider.js'
 import { attachWsServer } from './ws/server.js'
+import { HttpEmbedClient } from './signals/embed.js'
 
 const PORT = Number(process.env.AGGREGATOR_PORT ?? 3030)
 const HOST = process.env.AGGREGATOR_HOST ?? '0.0.0.0'
 const BRIDGE_TOKEN = process.env.AGGREGATOR_BRIDGE_TOKEN
+const EMBED_BASE_URL = process.env.AGGREGATOR_EMBED_URL ?? 'http://127.0.0.1:8000'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 // crowd-web is a Vite app from Phase 1 on, so prefer the built `dist/`;
@@ -199,6 +201,7 @@ const ws = attachWsServer(server, {
   identity,
   baseUrl: () => `http://${HOST}:${PORT}`,
   bridge: { token: BRIDGE_TOKEN },
+  embedClient: new HttpEmbedClient({ baseUrl: EMBED_BASE_URL }),
 })
 
 server.listen(PORT, HOST, () => {

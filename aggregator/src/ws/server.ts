@@ -21,10 +21,12 @@ import type {
   HostServerMessage,
   PhoneClientMessage,
   PhoneServerMessage,
+  VibeCard,
 } from '../signals/messages.js'
 import { WorkerWsTransport } from '../control/transport.js'
 import type { IdentityProvider } from '../identity/provider.js'
 import type { RoomStore, CreateRoomResult } from '../rooms/rooms.js'
+import type { EmbedClient } from '../signals/embed.js'
 
 /** Which bridge deck a crowd target lands on (PLAN.md §3: the crowd
  * renders as one more pad target). Phase 1 wires only deck A; the
@@ -41,15 +43,19 @@ export type BridgeAuth = {
 /** Per-room runtime: the signals state, the transport, and the
  * sockets currently attached. */
 class RoomBundle {
-  readonly signals = new RoomSignalsState()
+  readonly signals: RoomSignalsState
   readonly transport = new WorkerWsTransport()
   private interval: NodeJS.Timeout | null = null
-  private previousAppliedForShift: Map<string, number> = new Map(this.signals.snapshot().applied)
+  private previousAppliedForShift: Map<string, number>
 
   constructor(
     readonly code: string,
     readonly result: CreateRoomResult,
-  ) {}
+    options: { embedClient?: EmbedClient } = {},
+  ) {
+    this.signals = new RoomSignalsState(undefined, { embedClient: options.embedClient })
+    this.previousAppliedForShift = new Map(this.signals.snapshot().applied)
+  }
 
   start(): void {
     if (this.interval) return
@@ -92,6 +98,11 @@ export type AttachOptions = {
   identity: IdentityProvider
   baseUrl: () => string
   bridge: BridgeAuth
+  /** Phase 2 semantic dedupe — when present, suggestions are embedded
+   * via the backend's `/api/embed` endpoint and matched cosine-wise
+   * against the existing pool. When absent, suggestions still land
+   * (the pool just can't dedupe by similarity). */
+  embedClient?: EmbedClient
 }
 
 /** Stand a WebSocketServer up on the given HTTP server. Returns a
@@ -116,7 +127,7 @@ export function attachWsServer(
     // (it'd otherwise have to re-render the QR every tick); fetching
     // them through `ensureActive` re-uses the active-room idempotency.
     const result = await options.rooms.ensureActive(options.baseUrl())
-    const bundle = new RoomBundle(code, result)
+    const bundle = new RoomBundle(code, result, { embedClient: options.embedClient })
     bundle.start()
     bundles.set(code, bundle)
     return bundle
@@ -274,6 +285,43 @@ async function handlePhone(
       pushNow()
       return
     }
+    if (parsed.type === 'suggest') {
+      if (typeof parsed.text !== 'string') return
+      void (async () => {
+        const result = await bundle.signals.suggest({ userId: userId!, text: parsed.text })
+        if (result.kind === 'invalid' || result.kind === 'rate-limited') {
+          send(ws, {
+            type: 'suggest_ack',
+            result: result.kind,
+          } satisfies PhoneServerMessage)
+          return
+        }
+        const prompt = result.prompt
+        const card: VibeCard = {
+          id: prompt.id,
+          label: prompt.label,
+          voteCount: 0,
+        }
+        send(ws, {
+          type: 'suggest_ack',
+          result: result.kind,
+          card,
+        } satisfies PhoneServerMessage)
+      })()
+      return
+    }
+    if (parsed.type === 'vote') {
+      const vote = parsed.vote === 1 || parsed.vote === 0 || parsed.vote === -1 ? parsed.vote : null
+      if (vote === null || typeof parsed.promptId !== 'string') return
+      bundle.signals.castVote(userId, parsed.promptId, vote)
+      return
+    }
+    if (parsed.type === 'request_cards') {
+      const limit = typeof parsed.limit === 'number' ? Math.max(1, Math.min(50, parsed.limit)) : undefined
+      const cards = bundle.signals.dealCards(userId, limit)
+      send(ws, { type: 'cards', cards } satisfies PhoneServerMessage)
+      return
+    }
   })
 
   ws.on('close', () => {
@@ -300,10 +348,15 @@ async function handleHost(
     const snapshot = bundle.signals.snapshot()
     const label = describeBlend(snapshot.applied) || ''
     const shifting = bundle.isShifting(snapshot.applied)
+    // Phase 2: source the labels from the prompt pool so user-suggested
+    // prompts surface with their own text. The host-screen renders these
+    // as circles sized by `support` (the Wilson lower bound), still in
+    // single-organism mode — clusters land in Phase 3.
+    const promptLabels = new Map(snapshot.activePrompts.map((p) => [p.id, p.label]))
     const vibeSupport = [...snapshot.vibeSupport.entries()]
       .map(([id, support]) => ({
         id,
-        label: SEED_VIBE_BY_ID.get(id)?.label ?? id,
+        label: promptLabels.get(id) ?? SEED_VIBE_BY_ID.get(id)?.label ?? id,
         support,
       }))
       .sort((a, b) => b.support - a.support)
