@@ -111,12 +111,30 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   })
 }
 
+/** The aggregator is reached by the SlipMate webview (Tauri origin
+ * `tauri://localhost` on macOS) and by host-screen / crowd-web served
+ * from the aggregator itself. The webview's `fetch` would otherwise be
+ * blocked by CORS — without these the bridge stays at "DJ drives solo".
+ * Mirrors `backend/slipmate/controller.py`. */
+const CORS_HEADERS: Record<string, string> = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, POST, OPTIONS',
+  'access-control-allow-headers': 'content-type, x-bridge-token',
+}
+
 const server = createServer(async (req, res) => {
   if (!req.url || !req.method) {
     res.writeHead(400).end()
     return
   }
   const url = new URL(req.url, 'http://localhost')
+
+  // Pre-flight: every API endpoint accepts an OPTIONS probe.
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, CORS_HEADERS).end()
+    return
+  }
+  for (const [k, v] of Object.entries(CORS_HEADERS)) res.setHeader(k, v)
 
   if (req.method === 'GET' && url.pathname === '/healthz') {
     res.writeHead(200, { 'content-type': 'application/json' })
