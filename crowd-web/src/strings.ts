@@ -39,6 +39,10 @@ export const STRINGS = {
     tab: 'Vibes',
     eyebrow: 'Rate the vibe',
     empty: 'Be the first — suggest a vibe.',
+    /** Shown once the user has voted on every card the pool currently
+     * carries (PROMPT.md Phase 2 polish): we stop the infinite
+     * `request_cards` poll and ask the room for fresh material. */
+    allRated: "you've rated everything in the pool — suggest a new vibe to keep it moving",
     waitingForCards: 'Pulling cards from the room…',
     progress: 'rated {n} — keep going?',
     progressFirst: 'first one in — keep going?',
@@ -65,6 +69,19 @@ export const STRINGS = {
   },
   room: {
     tab: 'Room',
+    eyebrow: 'A peek at the room',
+    /** Used while the host-peek socket is still warming up. */
+    waiting: 'tuning in…',
+    /** Pre-clusters single-organism state: just temperature + sizes. */
+    singleOrganism: 'one room, one vibe — clusters appear with more voters',
+    /** Above CLUSTER_MIN_N: per-vibe cluster sentiment is on the map. */
+    multiCluster: 'clusters: how each faction feels about each vibe',
+    /** Aggregator unreachable. */
+    offline: 'projection screen is the truth right now',
+    /** Empty vibe map. */
+    emptyMap: 'no vibes ranked yet — head over to the Vibes tab',
+    /** Legacy fallback while the Room tab is mid-build (referenced by
+     * main.ts pre-Room-wire); kept until that switch flips. */
     comingSoon:
       'A peek at the room view lands soon — for now watch the projection screen.',
   },

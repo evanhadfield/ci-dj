@@ -23,6 +23,12 @@ const SWIPE_COMMIT_PX = 80
  * from the server. The aggregator deals a default-size batch (~12). */
 const PREFETCH_THRESHOLD = 3
 
+/** How long the `vibes__action--just-tapped` class lingers on the
+ * action button after a commit. The next card slides in faster than
+ * this; we just want a visible press confirmation. Mirrors the Now
+ * screen's flash pattern (`now.ts`). */
+const ACTION_FLASH_MS = 200
+
 export type VibesScreenHandlers = {
   /** Cast a vote on a prompt and slide the next card in. Phase 2 only
    * has +1 / 0 / -1; Phase 3 may reshape this for confidence levels. */
@@ -57,7 +63,14 @@ export class VibesScreen {
   /** Cards we've explicitly requested from the server but haven't
    * received yet — guards against a re-prefetch storm. */
   private requestInFlight = false
+  /** True once the server has answered a `request_cards` with `[]`:
+   * the user has rated everything in the pool. We stop polling and
+   * show `STRINGS.vibes.allRated` until a fresh card arrives (via a
+   * deal or a suggestion ack), at which point the flag clears and
+   * normal prefetching resumes. PROMPT.md Phase 2 polish item 2. */
+  private poolExhausted = false
   private suggestState: SuggestState = 'idle'
+  private readonly flashTimers: number[] = []
 
   constructor(handlers: VibesScreenHandlers) {
     this.handlers = handlers
@@ -141,13 +154,23 @@ export class VibesScreen {
 
   /** Append more cards to the local queue, filtering out anything we've
    * already voted on this session (server already filters, but a stale
-   * deal can cross with a fresh vote). */
+   * deal can cross with a fresh vote). When the server returned an
+   * empty deal we mark the pool as exhausted so the prefetch loop
+   * doesn't keep polling — only a fresh suggestion or a server-side
+   * deal reset clears the flag. */
   appendCards(cards: VibeCard[]): void {
     this.requestInFlight = false
+    let added = 0
     for (const card of cards) {
       if (this.voted.has(card.id)) continue
       if (this.queue.some((c) => c.id === card.id)) continue
       this.queue.push(card)
+      added++
+    }
+    if (cards.length === 0 && added === 0) {
+      this.poolExhausted = true
+    } else if (added > 0) {
+      this.poolExhausted = false
     }
     this.renderTopCard()
   }
@@ -157,12 +180,14 @@ export class VibesScreen {
     if (result === 'created' && card) {
       this.queue.unshift(card)
       this.suggestInput.value = ''
+      this.poolExhausted = false
       this.setSuggestState('created')
     } else if (result === 'deduped' && card) {
       // Front the deduped card so the user can vote on the existing
       // version they didn't realise was already in the pool.
       if (!this.voted.has(card.id) && !this.queue.some((c) => c.id === card.id)) {
         this.queue.unshift(card)
+        this.poolExhausted = false
       }
       this.suggestInput.value = ''
       this.setSuggestState('deduped')
@@ -183,12 +208,20 @@ export class VibesScreen {
   }
 
   destroy(): void {
+    for (const id of this.flashTimers) clearTimeout(id)
     this.root.remove()
   }
 
   private renderTopCard(): void {
     this.cardArea.replaceChildren()
     this.emptyEl.hidden = this.queue.length !== 0
+    if (this.queue.length === 0) {
+      // Once the pool is exhausted (server returned `[]` and the user
+      // has voted on everything), tell them to suggest something new
+      // instead of repeating the generic "be the first" empty copy.
+      this.emptyEl.textContent =
+        this.poolExhausted && this.votesCast > 0 ? STRINGS.vibes.allRated : STRINGS.vibes.empty
+    }
     const top = this.queue[0]
     if (!top) {
       if (this.shouldPrefetch()) this.requestMore()
@@ -223,19 +256,28 @@ export class VibesScreen {
       'disagree',
       STRINGS.vibes.disagreeEmoji,
       STRINGS.vibes.disagree,
-      () => this.commitVote(card.id, -1),
+      (button) => {
+        this.flashAction(button)
+        this.commitVote(card.id, -1)
+      },
     )
     const pass = makeActionButton(
       'pass',
       STRINGS.vibes.passEmoji,
       STRINGS.vibes.pass,
-      () => this.commitVote(card.id, 0),
+      (button) => {
+        this.flashAction(button)
+        this.commitVote(card.id, 0)
+      },
     )
     const agree = makeActionButton(
       'agree',
       STRINGS.vibes.agreeEmoji,
       STRINGS.vibes.agree,
-      () => this.commitVote(card.id, 1),
+      (button) => {
+        this.flashAction(button)
+        this.commitVote(card.id, 1)
+      },
     )
     actions.append(disagree, pass, agree)
     wrapper.append(actions)
@@ -287,6 +329,14 @@ export class VibesScreen {
     card.addEventListener('pointercancel', end)
   }
 
+  private flashAction(button: HTMLButtonElement): void {
+    button.classList.add('vibes__action--just-tapped')
+    const id = window.setTimeout(() => {
+      button.classList.remove('vibes__action--just-tapped')
+    }, ACTION_FLASH_MS)
+    this.flashTimers.push(id)
+  }
+
   private commitVote(promptId: string, vote: 1 | 0 | -1): void {
     // Guard against double-submission (a quick tap mid-swipe).
     if (this.voted.has(promptId)) return
@@ -310,6 +360,7 @@ export class VibesScreen {
   }
 
   private shouldPrefetch(): boolean {
+    if (this.poolExhausted) return false
     return !this.requestInFlight && this.queue.length <= PREFETCH_THRESHOLD
   }
 
@@ -360,7 +411,7 @@ function makeActionButton(
   kind: 'agree' | 'pass' | 'disagree',
   glyph: string,
   ariaLabel: string,
-  onClick: () => void,
+  onClick: (button: HTMLButtonElement) => void,
 ): HTMLButtonElement {
   const button = document.createElement('button')
   button.type = 'button'
@@ -368,6 +419,6 @@ function makeActionButton(
   button.textContent = glyph
   // Glyph is decorative; screen-readers + assistive tech read the label.
   button.setAttribute('aria-label', ariaLabel)
-  button.addEventListener('click', onClick)
+  button.addEventListener('click', () => onClick(button))
   return button
 }

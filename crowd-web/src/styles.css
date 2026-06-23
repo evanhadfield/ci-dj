@@ -597,6 +597,17 @@ button:focus-visible {
   color: var(--muted);
 }
 
+/* Press feedback on commit — pulses on top of the per-kind border so
+   the user reads "tap registered" before the next card slides in. The
+   class is added by `vibes.ts#flashAction` and removed after
+   ACTION_FLASH_MS (200ms). Mirrors the Now-screen `--just-tapped`. */
+.vibes__action--just-tapped {
+  transform: scale(0.94);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 0 0 2px currentColor;
+  transition: transform 80ms ease, background 80ms ease, box-shadow 80ms ease;
+}
+
 .vibes__suggest {
   display: flex;
   flex-direction: column;
