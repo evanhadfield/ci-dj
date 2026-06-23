@@ -29,6 +29,11 @@ export type CreateRoomResult = {
 
 export class RoomStore {
   private readonly rooms = new Map<string, Room>()
+  /** The current "active" room — the one new host-screens, frontends,
+   * and bridge clients reach for. Phase 1 keeps a single active room
+   * per aggregator (PROMPT.md "auto-create the default room" path);
+   * Phase 4+ can promote this to a queue when multi-room shows up. */
+  private activeCode: string | null = null
 
   /** Generate a fresh, unused room code. The retry loop is cheap at our
    * alphabet size — 32^4 ≈ 10^6 codes, collisions only matter at scale. */
@@ -47,8 +52,29 @@ export class RoomStore {
     const code = this.newCode()
     const joinUrl = `${joinBaseUrl.replace(/\/$/, '')}/c/${code}`
     this.rooms.set(code, { code, createdAt: Date.now(), participantCount: 0 })
+    if (this.activeCode === null) this.activeCode = code
     const qrSvg = await QRCode.toString(joinUrl, { type: 'svg', margin: 1 })
     return { code, joinUrl, qrSvg }
+  }
+
+  /** Return the active room, creating one if none exists. Idempotent —
+   * the host screen and the frontend bridge both call this at startup
+   * and must land on the same room. */
+  async ensureActive(joinBaseUrl: string): Promise<CreateRoomResult> {
+    if (this.activeCode) {
+      const existing = this.rooms.get(this.activeCode)
+      if (existing) {
+        const joinUrl = `${joinBaseUrl.replace(/\/$/, '')}/c/${existing.code}`
+        const qrSvg = await QRCode.toString(joinUrl, { type: 'svg', margin: 1 })
+        return { code: existing.code, joinUrl, qrSvg }
+      }
+      this.activeCode = null
+    }
+    return this.create(joinBaseUrl)
+  }
+
+  activeRoomCode(): string | null {
+    return this.activeCode
   }
 
   /** Return the room or `null`. Codes are normalised (uppercase, alphabet
@@ -64,6 +90,7 @@ export class RoomStore {
 
   retire(code: string): void {
     this.rooms.delete(code)
+    if (this.activeCode === code) this.activeCode = null
   }
 
   incrementParticipants(code: string, delta: number): void {

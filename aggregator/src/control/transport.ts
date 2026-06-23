@@ -1,17 +1,26 @@
 /** ControlTransport — how the bridge speaks `set_style` into SlipMate
- * (Phase 0 seam; docs/collective/PLAN.md §3).
+ * (docs/collective/PLAN.md §3).
  *
  * v1 build target: `WorkerWsTransport`, applying the crowd's blend via
- * the same deck-worker command channel the frontend already uses. In
- * the native shell that means a Tauri IPC `deck_set_style` call (today
- * it lives in `frontend/src/deck/nativeDeck.ts`); the name keeps the
- * historical WS-era label so the codebase reads continuously with the
- * design doc.
+ * the same deck-worker command channel the frontend already uses. The
+ * Phase 1 implementation is a fan-out publisher (a subscriber callback
+ * registered by the WS bridge endpoint): every `setStyle` call is
+ * broadcast to whichever bridge clients are connected. Concretely the
+ * SlipMate frontend opens that channel, gates by the DJ influence
+ * macro, and invokes the existing Tauri-IPC `deck_set_style` command
+ * (`frontend/src/deck/nativeDeck.ts`).
+ *
+ * Choosing the frontend-as-bridge-client over an auth'd loopback
+ * endpoint exposed by the Rust shell keeps the influence gate and the
+ * "lock for the drop" co-located with the macro (one source of truth)
+ * and gives §9's fail-safe for free: an aggregator that goes down
+ * closes the bridge socket, which the frontend treats as influence
+ * = 0, with the deck unaffected.
  *
  * End-state (capture, don't build): `McpTransport`, proxying through
- * the native MCP server to the Rust store described by ADR-0020 — which
- * is Proposed, not built. The transport interface exists so the bridge
- * can compose against it now and Phase N can swap the implementation. */
+ * the native MCP server to the Rust store described by ADR-0020 —
+ * Proposed, not built. The transport interface exists so Phase N can
+ * swap implementations without touching the pipeline. */
 
 export type DeckId = 'a' | 'b'
 
@@ -42,16 +51,41 @@ export type ControlTransport = {
   isHealthy: () => Promise<boolean>
 }
 
-/** v1 transport (real-but-idle in Phase 0). Phase 1 will wire it to
- * SlipMate's deck command channel; until then both methods are no-ops
- * and `isHealthy` reports `true` so the bridge can exercise its full
- * pipeline against the seam. */
+/** v1 transport: a fan-out publisher whose subscribers (the bridge WS
+ * clients in Phase 1, an MCP proxy in Phase 4+) receive every queued
+ * intent. `isHealthy` reports `true` only while at least one subscriber
+ * is connected — with no consumer the bridge would be shouting into
+ * the void and the §9 fail-safe should kick in. */
 export class WorkerWsTransport implements ControlTransport {
-  async setStyle(_intent: SetStyleIntent): Promise<void> {
-    // No-op in Phase 0; Phase 1 will dispatch the deck command here.
+  private readonly subscribers = new Set<(intent: SetStyleIntent) => void>()
+
+  /** Register a fan-out target. Returns an unsubscribe; safe to call
+   * after the transport itself is gone. */
+  subscribe(listener: (intent: SetStyleIntent) => void): () => void {
+    this.subscribers.add(listener)
+    return () => {
+      this.subscribers.delete(listener)
+    }
   }
+
+  /** True iff there's somewhere to deliver intents to (PLAN.md §9). */
+  hasSubscribers(): boolean {
+    return this.subscribers.size > 0
+  }
+
+  async setStyle(intent: SetStyleIntent): Promise<void> {
+    for (const listener of this.subscribers) {
+      try {
+        listener(intent)
+      } catch {
+        // A misbehaving subscriber must not stall the pipeline; the
+        // operator will see it on the listener's own logs.
+      }
+    }
+  }
+
   async isHealthy(): Promise<boolean> {
-    return true
+    return this.hasSubscribers()
   }
 }
 
