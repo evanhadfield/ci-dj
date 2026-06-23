@@ -192,9 +192,14 @@ function handleMessage(message: PhoneServerMessage): void {
 function startOnboarding(): void {
   mountOnboarding(rootEl!, {
     vibes,
-    onSubmit: ({ picks }) => {
+    onSubmit: ({ picks, seedText }) => {
       seeded = true
-      saveStored(code, { seeded: true })
+      // PLAN.md §7b promises the free-text seed becomes a deduped
+      // vibe-prompt — but the dedupe is Phase 2 (semantic via
+      // /api/embed). Phase 1 records the text client-side so a Phase 2
+      // build can pick it up on the next session without losing it.
+      saveStored(code, { seeded: true, pendingSeedText: seedText || undefined })
+      if (picks.length === 0) return
       if (userId) connection.send({ type: 'seed', picks })
       else pendingSeed = picks
     },

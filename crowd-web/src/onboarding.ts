@@ -2,11 +2,15 @@
  * tap-3-vibes pick. Submitting casts 3 first votes and dismisses the
  * overlay. Skip is always present. */
 
-import { STRINGS, interpolate } from './strings.ts'
+import { STRINGS } from './strings.ts'
 import type { VibePrompt } from './types.ts'
 
 export type OnboardingResult = {
   picks: string[]
+  /** Free-text seed or chip selection (PLAN.md §7b). Phase 1 stores
+   * this client-side only; Phase 2 sends it to /api/embed for semantic
+   * dedupe and adds it to the vibe-prompt pool. */
+  seedText: string
 }
 
 export type OnboardingOptions = {
@@ -57,6 +61,13 @@ export function mountOnboarding(
       chipSelected = null
       renderChips()
     }
+    renderFooter()
+  })
+  seedInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      if (!submitBtn.disabled) submitBtn.click()
+    }
   })
   inner.append(seedInput)
 
@@ -73,6 +84,7 @@ export function mountOnboarding(
         chipSelected = chipSelected === chip ? null : chip
         if (chipSelected) seedInput.value = ''
         renderChips()
+        renderFooter()
       })
       chipsRow.append(button)
     }
@@ -123,14 +135,20 @@ export function mountOnboarding(
   const submitBtn = document.createElement('button')
   submitBtn.type = 'button'
   submitBtn.className = 'onboarding__submit'
+  /** True iff the user has given us any first-touch signal at all. Per
+   * PLAN.md §7b the free-text, the opt-out chips, and the pick-3 are
+   * each independently valid — submit must accept whichever the user
+   * actually chose. */
+  function hasAnySignal(): boolean {
+    return picks.size === 3 || seedInput.value.trim().length > 0 || chipSelected !== null
+  }
   function renderFooter() {
     footer.replaceChildren()
-    const count = picks.size
-    submitBtn.textContent =
-      count >= 3
-        ? STRINGS.onboarding.submit
-        : interpolate(STRINGS.onboarding.pickProgress, { n: count })
-    submitBtn.disabled = count < 3
+    const enabled = hasAnySignal()
+    submitBtn.textContent = enabled
+      ? STRINGS.onboarding.submit
+      : STRINGS.onboarding.submitEmpty
+    submitBtn.disabled = !enabled
     footer.append(submitBtn)
     const skipBtn = document.createElement('button')
     skipBtn.type = 'button'
@@ -144,8 +162,9 @@ export function mountOnboarding(
   }
   submitBtn.addEventListener('click', () => {
     if (submitBtn.disabled) return
+    const seedText = seedInput.value.trim() || chipSelected || ''
     dismiss()
-    options.onSubmit({ picks: [...picks] })
+    options.onSubmit({ picks: [...picks], seedText })
   })
   renderFooter()
 

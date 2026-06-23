@@ -7,6 +7,11 @@ const KEY_PREFIX = 'slipmate.collective.'
 export type Stored = {
   sessionToken?: string
   seeded?: boolean
+  /** PLAN.md §7b free-text seed, captured client-side in Phase 1 and
+   * fed to /api/embed for semantic dedupe in Phase 2 (the aggregator
+   * has no embedding-aware seed path yet, so storing here keeps the
+   * promise without losing the input). */
+  pendingSeedText?: string
 }
 
 function key(code: string): string {

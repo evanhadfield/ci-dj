@@ -15,6 +15,7 @@ export const STRINGS = {
     pickPrompt: 'Tap 3 vibes you’re into',
     pickProgress: '{n} of 3',
     submit: 'Done',
+    submitEmpty: 'Type, pick a chip, or tap 3 vibes',
     skip: 'Skip',
   },
   now: {
