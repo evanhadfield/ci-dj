@@ -196,6 +196,13 @@ Open `http://localhost:3030/` in a browser → the projection view
 (QR + 4-char code + temperature trace + vibe map). Phones either scan
 the QR or visit `http://localhost:3030/c/{code}` directly.
 
+> Real phones on a different network can't reach `localhost`. For that,
+> run `just tunnel` in a third terminal to expose the aggregator over
+> Cloudflare's quick tunnel; the QR auto-rewrites to the public HTTPS
+> URL. See [cloudflare-tunnel.md](cloudflare-tunnel.md) for the
+> mental model, named-tunnel setup, and why no aggregator code change
+> is needed.
+
 **Terminal 2** — the SlipMate native app, with the collective layer
 turned on and pointed at the aggregator:
 

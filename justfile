@@ -115,5 +115,13 @@ lint:
 format:
     cd backend && uv run ruff format .
 
+# Public HTTPS for the local aggregator via Cloudflare's quick tunnel —
+# the path to phones-on-real-devices (docs/collective/cloudflare-tunnel.md).
+# Needs `cloudflared` on PATH (`brew install cloudflared`); the aggregator
+# should already be running on :3030 in another terminal. Override the
+# target port with AGGREGATOR_PORT.
+tunnel:
+    cloudflared tunnel --url http://localhost:${AGGREGATOR_PORT:-3030}
+
 # Everything a PR must pass: lint + tests.
 check: lint test
