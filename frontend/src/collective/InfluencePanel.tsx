@@ -1,9 +1,11 @@
-/** DJ influence macro + crowd pad target (Phase 0 UI surface; docs/collective/PLAN.md §2).
+/** DJ influence macro + crowd pad target (Phase 1 surface; docs/collective/PLAN.md §2, §7c).
  *
- * Inert by design: when the feature flag is off this renders nothing,
- * and when it is on the controls move but no signal is sent and no
- * audio is touched. Phase 1 wires the knob into the bridge and the
- * crowd target onto the deck's XY pad. */
+ * Phase 1 wires the macro into the bridge: amount scales every prompt
+ * weight the aggregator pushes, lock drops crowd influence to 0
+ * immediately (`bridge.ts`). The panel also surfaces the bridge status
+ * and the active room code so the DJ has one place to read the live
+ * connection + the join code (the host-screen renders the QR for the
+ * room, but the panel is what the DJ glances at). */
 
 import { useTranslation } from 'react-i18next'
 
@@ -13,15 +15,29 @@ import { Panel } from '../ui/Panel'
 import { Stat } from '../ui/Stat'
 import type { CrowdInfluence } from './influence'
 import { isCollectiveEnabled } from './flag'
+import type { BridgeStatus } from './useBridge'
 
 type InfluencePanelProps = {
   influence: CrowdInfluence
   onChange: (next: CrowdInfluence) => void
+  status: BridgeStatus
 }
 
-export function InfluencePanel({ influence, onChange }: InfluencePanelProps) {
+export function InfluencePanel({ influence, onChange, status }: InfluencePanelProps) {
   const { t } = useTranslation()
   if (!isCollectiveEnabled()) return null
+  const liveTarget = status.intent?.prompts ?? []
+  const targetSummary = liveTarget.length
+    ? liveTarget
+        .slice(0, 3)
+        .map(({ text, weight }) =>
+          t('collective.influence.crowdTargetItem', {
+            percent: Math.round(weight * 100),
+            text,
+          }),
+        )
+        .join(' · ')
+    : t('collective.influence.crowdTargetIdle')
   return (
     <Panel
       className="collective-influence"
@@ -43,7 +59,16 @@ export function InfluencePanel({ influence, onChange }: InfluencePanelProps) {
       </Button>
       <Stat
         label={t('collective.influence.crowdTarget')}
-        value={t('collective.influence.crowdTargetIdle')}
+        value={targetSummary}
+      />
+      <Stat
+        label={t('collective.influence.room')}
+        value={status.room ? status.room.code : t('collective.influence.roomConnecting')}
+      />
+      <Stat
+        label={t('collective.influence.bridge')}
+        value={t(`collective.influence.bridgeState.${status.bridge.kind}`)}
+        tone={status.bridge.kind === 'offline' ? 'danger' : 'default'}
       />
     </Panel>
   )

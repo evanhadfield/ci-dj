@@ -1,14 +1,20 @@
-/* host-screen Phase 0 scaffold — projection-ready: large QR, large
-   code, no clutter. Phase 1 adds the vibe map + temperature trace
-   (docs/collective/PLAN.md §7c). */
+/* host-screen Phase 1 — projection view: join chrome + approval-temperature
+   trace + single-organism vibe opinion map. Phase 3 lights up clusters on
+   the vibe map (PLAN.md §7c, §10 Phase 3). */
+
 :root {
   color-scheme: dark;
   --bg: #0a0a0c;
+  --bg-elev: #131316;
   --fg: #f3f4f6;
   --muted: #8b8d97;
   --accent: #b6f06b;
+  --accent-soft: rgba(182, 240, 107, 0.18);
+  --warm: #f3c46b;
+  --line: rgba(255, 255, 255, 0.08);
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
+
 html,
 body {
   margin: 0;
@@ -16,68 +22,186 @@ body {
   background: var(--bg);
   color: var(--fg);
 }
-main {
+
+.eyebrow {
+  font-size: 0.85rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 0.5rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.host {
+  display: grid;
+  grid-template-columns: minmax(280px, 26vw) 1fr;
+  gap: 2rem;
+  min-height: 100dvh;
+  padding: 2.5rem;
+  box-sizing: border-box;
+}
+
+.host__header {
   display: flex;
   flex-direction: column;
   gap: 2rem;
-  align-items: center;
-  justify-content: center;
-  min-height: 100dvh;
-  padding: 3rem 2rem;
-  box-sizing: border-box;
 }
-.eyebrow {
-  font-size: 1rem;
-  letter-spacing: 0.3em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin: 0;
-}
-.join {
+
+.host__join {
   display: flex;
-  gap: clamp(2rem, 6vw, 5rem);
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: center;
+  flex-direction: column;
+  gap: 1.25rem;
+  align-items: flex-start;
 }
-.qr {
-  width: clamp(240px, 30vw, 420px);
+
+.host__qr {
+  width: 100%;
   aspect-ratio: 1;
   background: #fff;
-  border-radius: 1rem;
-  padding: 1rem;
+  border-radius: 1.25rem;
+  padding: 1.25rem;
   margin: 0;
   display: grid;
   place-items: center;
 }
-.qr svg {
+
+.host__qr svg {
   width: 100%;
   height: 100%;
 }
-.code {
-  text-align: left;
-}
-.code .label {
-  font-size: 0.9rem;
-  letter-spacing: 0.2em;
+
+.host__code-label {
+  font-size: 0.95rem;
+  letter-spacing: 0.25em;
   text-transform: uppercase;
   color: var(--muted);
   margin: 0;
 }
-.code .value {
-  font-size: clamp(3rem, 8vw, 6rem);
-  letter-spacing: 0.15em;
+
+.host__code-value {
+  font-size: clamp(3rem, 6vw, 5rem);
+  letter-spacing: 0.18em;
   margin: 0.25rem 0 0;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
-.code .url {
-  margin: 0.5rem 0 0;
+
+.host__code-url {
+  margin: 0.6rem 0 0;
   color: var(--muted);
   font-size: 1rem;
   word-break: break-all;
 }
-.hint {
+
+.host__centerpiece {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 2rem;
+}
+
+.host__nowplaying {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 1.25rem;
+  padding: 1.5rem 1.75rem;
+}
+
+.host__nowplaying-label {
+  font-size: clamp(1.6rem, 3vw, 2.5rem);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.host__nowplaying-participants {
+  margin: 0.5rem 0 0;
   color: var(--muted);
   font-size: 1rem;
+}
+
+.host__trace {
+  position: relative;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 1.25rem;
+  padding: 1rem;
+  overflow: hidden;
+}
+
+.host__trace canvas {
+  width: 100%;
+  height: 160px;
+  display: block;
+}
+
+.host__celebrate {
+  position: absolute;
+  top: 0.75rem;
+  right: 1.25rem;
+  font-size: 2rem;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 600ms ease;
+  pointer-events: none;
+}
+
+.host__celebrate--on {
+  opacity: 1;
+  animation: celebrate-pulse 1200ms ease-in-out infinite;
+}
+
+@keyframes celebrate-pulse {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-6px) rotate(8deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .host__celebrate--on { animation: none; }
+}
+
+.host__vibemap {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 1.25rem;
+  padding: 1.5rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.host__vibes {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  align-content: center;
+  justify-content: center;
+}
+
+.host__vibe {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.host__vibe-circle {
+  border-radius: 50%;
+  background: var(--accent-soft);
+  border: 2px solid var(--accent);
+  transition: width 400ms ease, height 400ms ease, opacity 400ms ease;
+}
+
+.host__vibe-label {
+  font-size: 0.95rem;
+  color: var(--fg);
+}
+
+.host__vibemap-hint {
+  font-size: 0.85rem;
+  margin: 0;
 }

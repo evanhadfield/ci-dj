@@ -12,6 +12,7 @@ import { useMidi } from './control/useMidi'
 import { InfluencePanel } from './collective/InfluencePanel'
 import { INITIAL_INFLUENCE, type CrowdInfluence } from './collective/influence'
 import { isCollectiveEnabled } from './collective/flag'
+import { useCollectiveBridge } from './collective/useBridge'
 import { MediaExplorer } from './media/MediaExplorer'
 import { DeckColumn } from './deck/DeckColumn'
 import { useDeck } from './deck/useDeck'
@@ -242,11 +243,12 @@ function App() {
     return aPlayback ? phaseOffsetBeats(a, b) : phaseOffsetBeats(b, a)
   }, [deckA, deckB])
 
-  // Collective layer (Phase 0): the influence macro is inert — its
-  // state lives here but no consumer reads it yet. Rendering is gated
-  // on the build flag inside InfluencePanel, so a build without
-  // VITE_COLLECTIVE_ENABLED leaves SlipMate unchanged.
+  // Collective layer (Phase 1): the influence macro now scales the
+  // crowd's `set_style` intents via the bridge below. With the build
+  // flag off, `useCollectiveBridge` is inert and the panel renders
+  // nothing — SlipMate behaves as before.
   const [influence, setInfluence] = useState<CrowdInfluence>(INITIAL_INFLUENCE)
+  const collectiveStatus = useCollectiveBridge(influence)
 
   const midi = useMidi()
   const {
@@ -429,7 +431,11 @@ function App() {
         />
       )}
       {isCollectiveEnabled() && (
-        <InfluencePanel influence={influence} onChange={setInfluence} />
+        <InfluencePanel
+          influence={influence}
+          onChange={setInfluence}
+          status={collectiveStatus}
+        />
       )}
       <div className="app__booth">
         <DeckColumn

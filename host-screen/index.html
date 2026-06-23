@@ -7,19 +7,36 @@
     <link rel="stylesheet" href="/host/main.css" />
   </head>
   <body>
-    <main>
-      <p class="eyebrow">SlipMate · join the room</p>
-      <div class="join">
-        <figure id="qr" aria-label="Join QR" class="qr">…</figure>
-        <div class="code">
-          <p class="label">Code</p>
-          <p id="code" class="value">— — — —</p>
-          <p id="url" class="url"></p>
+    <main class="host">
+      <header class="host__header">
+        <p class="eyebrow">SlipMate · join the room</p>
+        <div class="host__join">
+          <figure id="qr" class="host__qr" aria-label="Join QR">…</figure>
+          <div class="host__code">
+            <p class="host__code-label">Code</p>
+            <p id="code" class="host__code-value">— — — —</p>
+            <p id="url" class="host__code-url"></p>
+          </div>
         </div>
-      </div>
-      <p class="hint">
-        Scan the QR or visit the URL and type the code. No app needed.
-      </p>
+      </header>
+      <section class="host__centerpiece" aria-label="Crowd signals">
+        <div class="host__nowplaying">
+          <p class="eyebrow">Now playing</p>
+          <p id="nowLabel" class="host__nowplaying-label">— no signals yet</p>
+          <p id="participants" class="host__nowplaying-participants"></p>
+        </div>
+        <div class="host__trace" aria-label="Approval temperature">
+          <canvas id="trace" width="800" height="160"></canvas>
+          <div id="celebrate" class="host__celebrate" aria-hidden="true">★</div>
+        </div>
+        <div class="host__vibemap" aria-label="Vibe opinion map (single-organism mode)">
+          <p class="eyebrow">Vibe map</p>
+          <div id="vibes" class="host__vibes"></div>
+          <p class="host__vibemap-hint muted">
+            Single-organism view — clusters land in Phase 3.
+          </p>
+        </div>
+      </section>
     </main>
     <script type="module" src="/host/main.js"></script>
   </body>
