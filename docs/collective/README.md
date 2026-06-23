@@ -1,7 +1,10 @@
 # Collective DJ layer
 
 Additive crowd-intelligence layer for SlipMate, built behind the
-`COLLECTIVE_ENABLED` flag. Full design + phased build plan: [PLAN.md](PLAN.md).
+`COLLECTIVE_ENABLED` flag. Full design + phased build plan:
+[PLAN.md](PLAN.md). To run the live demo end-to-end (phone tap →
+deck restyle), jump to [**Running Phase 1 locally**](#running-phase-1-locally)
+— it lists every prerequisite and the exact two-terminal command.
 
 ## Status
 
@@ -76,35 +79,115 @@ What is still stubbed (the seams for Phase 2+):
 - `aggregator/control/transport.ts`: `McpTransport` stays a loud stub;
   ADR-0020 remains Proposed.
 
-## Verifying Phase 1 locally
+## Running Phase 1 locally
+
+This is a runbook for the full demo (phone tap → deck restyle). The
+first time you set up the repo, you need every prerequisite below.
+After that, only the **Run** section applies day-to-day.
+
+### Prerequisites — install once
+
+These are the tools the parent SlipMate project needs, plus what's new
+for the collective layer. On macOS, all install via `brew` or one-line
+installers; the same recipes work on Linux with `apt`/`pacman` etc.
+
+| Tool                              | Why                                 | Install                                                                                                  |
+| --------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Node.js 22.12+** (or 20.19+)    | aggregator, crowd-web, frontend     | `brew install node` (or use `nvm`)                                                                       |
+| **`just`**                        | task runner the parent repo uses    | `brew install just`                                                                                      |
+| **Rust + `cargo`**                | builds the Tauri native shell       | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` then `source $HOME/.cargo/env`         |
+| **`cargo-tauri`** CLI             | `cargo tauri dev` / `tauri build`   | `cargo install tauri-cli@^2`                                                                             |
+| **`uv`**                          | Python package manager (backend)    | `curl -LsSf https://astral.sh/uv/install.sh \| sh`                                                       |
+| **`pyenv`** + Python **3.13**     | matches `backend/.python-version`   | `brew install pyenv` then `pyenv install 3.13`                                                           |
+
+Sanity-check each is on `PATH`: `node -v`, `just --version`,
+`cargo --version`, `cargo tauri --version`, `uv --version`,
+`python3 --version` (should print 3.13.x from inside `backend/`).
+
+### One-time setup (downloads weights + builds deps)
+
+From the repo root:
 
 ```sh
-# 1. Backend (Phase 0 surface still works — unchanged in Phase 1)
-COLLECTIVE_ENABLED=1 uv --project backend run slipmate &
-curl -s -X POST http://127.0.0.1:8000/api/embed \
-  -H content-type:application/json \
-  -d '{"text":"warm disco funk"}' | jq '.dim'   # → 768
+# Backend deps + Magenta model weights (~2 GB for the small model).
+# Living outside the repo under ~/Documents/Magenta/magenta-rt-v2
+# unless MAGENTA_HOME is set.
+cd backend && uv sync \
+  && uv run mrt models init \
+  && uv run mrt models download mrt2_small \
+  && cd ..
 
-# 2. Aggregator + crowd-web (one terminal each)
-cd crowd-web && npm install && npm run build && cd -
-cd aggregator && npm install && npm run build && npm start &
+# Aggregator (Node) + crowd-web (Vite) deps + builds. Both produce
+# their dist/ that the aggregator serves at runtime.
+cd aggregator && npm install && npm run build && cd ..
+cd crowd-web  && npm install && npm run build && cd ..
 
-# Open http://localhost:3030/ on the projection screen — QR + code.
-# Scan with a phone → /c/{code} → onboarding overlay + Now screen.
-
-# 3. Frontend: bridge wires the influence macro to the live decks
-VITE_COLLECTIVE_ENABLED=1 \
-VITE_AGGREGATOR_URL=http://localhost:3030 \
-just tauri-dev
-# The Crowd Influence panel above the booth shows the active room
-# code, the bridge status ("live" / "DJ drives solo"), and the live
-# crowd target. Turn the influence knob up → crowd taps move deck A.
+# Frontend deps (the Tauri webview). Used by `just tauri-dev` during
+# its build step; safe to run once up front.
+cd frontend && npm install && cd ..
 ```
 
-Phase 1 checkpoint (PLAN.md §10): a phone tap → pad's crowd dot moves
-→ deck restyles within the model's latency → the DJ override (lock or
-zero the macro) wins → killing the aggregator drops influence to 0 with
-the deck unaffected.
+The parent `just setup` recipe also pulls `mrt2_base` (~6 GB) and
+Stable Audio 3 weights (~8 GB) — neither is required for Phase 1.
+`mrt2_small` is enough for the deck-restyles-from-crowd demo.
+
+### Run — two terminals
+
+**Terminal 1** — the aggregator (and the host-screen + crowd-web it
+serves):
+
+```sh
+cd aggregator && npm start
+# [aggregator] listening on http://0.0.0.0:3030
+# [aggregator] bridge: loopback-only (set AGGREGATOR_BRIDGE_TOKEN for LAN)
+```
+
+Open `http://localhost:3030/` in a browser → the projection view
+(QR + 4-char code + temperature trace + vibe map). Phones either scan
+the QR or visit `http://localhost:3030/c/{code}` directly.
+
+**Terminal 2** — the SlipMate native app, with the collective layer
+turned on and pointed at the aggregator:
+
+```sh
+VITE_COLLECTIVE_ENABLED=1 VITE_AGGREGATOR_URL=http://localhost:3030 just tauri-dev
+```
+
+**Both env vars must be on the same line as `just`.** Vite inlines
+`import.meta.env.VITE_*` at *build* time (`npm run build` runs inside
+the `tauri-dev` recipe), so dropping the env vars rebuilds without
+the flag and the influence panel vanishes. Common gotchas:
+
+- Running plain `cargo tauri dev` instead of `just tauri-dev` skips
+  `SLIPMATE_SIDECARS=1`, which means the backend Python sidecars
+  never spawn and the model dropdown stays empty.
+- Running `just tauri-dev` without the `VITE_*` env vars succeeds, but
+  the collective panel is absent (the flag baked to `false`).
+- Editing aggregator code requires `npm run build && npm start` again
+  in T1 — there's no hot-reload yet.
+
+### Phase 1 checkpoint (PLAN.md §10)
+
+With both terminals up and a phone joined:
+
+1. **Pick a model on Deck A** (`mrt2_small`) and press Play. The deck
+   starts streaming generated audio.
+2. **In the `Crowd influence` panel** at the top of SlipMate, confirm:
+   - `ROOM` shows a 4-char code (matching the projection screen).
+   - `BRIDGE` reads `live` in the panel's accent colour.
+3. **Turn the `INFLUENCE` knob up** — clockwise drag, ~50%.
+4. **On the phone, complete the onboarding pick-3** (e.g. select three
+   vibes) and then tap **Love this** a few times on the Now screen.
+5. **The deck restyles** — within the model's ~3 s reaction phrase
+   the Magenta output shifts toward the prompts your reactions
+   weighted. The `CROWD TARGET` line in the panel updates with the
+   live top-3 prompts.
+6. **Test the DJ override**: tap `LOCK FOR THE DROP`. The panel's
+   crowd target stays visible but the deck stops responding — the DJ
+   has won.
+7. **Test the fail-safe**: Ctrl-C the aggregator in T1. The bridge
+   flips to `DJ drives solo`. The deck keeps generating exactly where
+   the DJ left it; no error, no audio glitch.
 
 ## Tests + lint
 
